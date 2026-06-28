@@ -1,0 +1,8 @@
+# 固定 USB gadget 网络接口名为 usb0, 阻止 systemd-udevd 重命名为 enxXX
+# (udev predictable naming 会丢失 initramfs 配置的 IP)
+# 只用 OriginalName= (内核/driver 分配的原始名字), 最可靠的匹配方式
+[Match]
+OriginalName=usb0
+
+[Link]
+Name=usb0

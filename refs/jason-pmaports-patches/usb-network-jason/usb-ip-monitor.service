@@ -1,0 +1,13 @@
+[Unit]
+Description=Monitor usb0 IP and reconfigure if lost
+After=NetworkManager.service setup-usb-gadget.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/usb-ip-monitor.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

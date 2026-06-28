@@ -1,0 +1,49 @@
+pkgname=usb-network-jason
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="USB network setup for Xiaomi Mi Note 3 (jason)"
+url="https://github.com/lylcare1/XiaoMiNote3"
+arch="aarch64"
+license="MIT"
+depends="dnsmasq iproute2"
+source="
+  setup-usb-gadget.sh
+  setup-usb-gadget.service
+  usb-ip-monitor.sh
+  usb-ip-monitor.service
+  10-usb0.link
+  99-usb-ncm.rules
+  99-usb0-unmanaged.conf
+  override-time-wait-sync.conf
+  journald-storage.conf
+"
+package() {
+  install -Dm644 "$srcdir/setup-usb-gadget.service" "$pkgdir/etc/systemd/system/setup-usb-gadget.service"
+  install -Dm644 "$srcdir/usb-ip-monitor.service" "$pkgdir/etc/systemd/system/usb-ip-monitor.service"
+  install -Dm755 "$srcdir/setup-usb-gadget.sh" "$pkgdir/usr/bin/setup-usb-gadget.sh"
+  install -Dm755 "$srcdir/usb-ip-monitor.sh" "$pkgdir/usr/bin/usb-ip-monitor.sh"
+  install -Dm644 "$srcdir/10-usb0.link" "$pkgdir/etc/systemd/network/10-usb0.link"
+  install -Dm644 "$srcdir/99-usb-ncm.rules" "$pkgdir/etc/udev/rules.d/99-usb-ncm.rules"
+  install -Dm644 "$srcdir/99-usb0-unmanaged.conf" "$pkgdir/etc/NetworkManager/conf.d/99-usb0-unmanaged.conf"
+  install -Dm644 "$srcdir/override-time-wait-sync.conf" "$pkgdir/etc/systemd/system/systemd-time-wait-sync.service.d/override.conf"
+  install -Dm644 "$srcdir/journald-storage.conf" "$pkgdir/etc/systemd/journald.conf.d/storage.conf"
+
+  # Enable services (symlinks to systemd target.wants)
+  mkdir -p "$pkgdir/etc/systemd/system/sysinit.target.wants"
+  ln -sf ../setup-usb-gadget.service \
+    "$pkgdir/etc/systemd/system/sysinit.target.wants/setup-usb-gadget.service"
+  mkdir -p "$pkgdir/etc/systemd/system/multi-user.target.wants"
+  ln -sf ../usb-ip-monitor.service \
+    "$pkgdir/etc/systemd/system/multi-user.target.wants/usb-ip-monitor.service"
+}
+sha512sums="
+efd4c915ed3c3a9ab0f09d5041b0728e2988578373aab7de7cf42fb08b5526bb87504f157e92e32198387e97e2b88a1ea3f4963ce581f318b13af18db8ef3307  setup-usb-gadget.sh
+fda002d7dfa2251ed69746d7e694e29f2f78713164e98fda9bdd9666392288b265b6fdf8cda0d43d89fba6a85afce5a8d5f587a5d30829b005a55a714edfe489  setup-usb-gadget.service
+0a3668387202eb85e303be6bb7269836f19e48b2b2c0c0a26e5e2aeb65785149312616adeae0a9de6fabd2c449626b21935fb2e03857296d8363acb299342567  usb-ip-monitor.sh
+3235ed32e22ec04381e637f1d2e087b980cfbd6021d6b7e3dd2f7d274c19439be25d0e61cf0056c866e1e03b88d3d2ad34ee34c86efde232947768cb6d5437d7  usb-ip-monitor.service
+4c3d6d90aeee4a68d049c986fa0e2412b35f1a06fb4daff99e21e7aa7f9dc0bbc85e5423be096a8e84cd5b7ea051f1398ccb15bf1ab34881fe0d45edafe96bc4  10-usb0.link
+476672af8672e93fe51c9f545c36010842f3abf1fad635a3325c7e1ac71b40997f320fd662c37d9c94ace52a6a78b0a591d1607065ffb30dce7d4e18eaf2f922  99-usb-ncm.rules
+f264f513fb28aa97a7618a7f55072c8e4ba6577ef95925455746dd92bfc8cf67d6b13e13107e5b307a06d5526bcc1f642fda3802dfe34727dbe647fb5c58b396  99-usb0-unmanaged.conf
+14675f7f96f801c6c521ca42a120d4908c003d574a5e2727e11962e35318266dc4d15f9d9dc5ec04cf658069a9f756fe87d43fc08a923cd73831fcc601e49ea8  override-time-wait-sync.conf
+3944c15e65c27959290c3c9997c0250b5e286341304bd78b37bdb36c3254192e223b95e5fd7a3d0474f5308985141d95271d07b77ad97b86349fdace69ebfe6d  journald-storage.conf
+"

@@ -1,0 +1,17 @@
+[Unit]
+Description=Setup USB gadget network for jason
+DefaultDependencies=no
+After=systemd-udevd.service systemd-modules-load.service
+Before=sysinit.target
+Wants=systemd-udevd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 超时保护: 脚本最多运行 15 秒, 防止 dnsmasq/IP 配置阻塞 sysinit.target
+# 导致整个 boot 卡在加载页面
+TimeoutStartSec=15
+ExecStart=/usr/bin/setup-usb-gadget.sh
+
+[Install]
+WantedBy=sysinit.target

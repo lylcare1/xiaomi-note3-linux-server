@@ -1,0 +1,4 @@
+# 此文件保留为占位 (历史曾有 RUN 规则, 已移除因为它在 udev rename 时
+# 触发 ip addr flush/add 干扰 udev 重命名操作, 导致 boot 卡死).
+# IP 重新应用由 setup-usb-gadget.service (sysinit) 和 usb-ip-monitor.service (multi-user) 负责.
+# 接口命名固定由 10-usb0.link 负责.

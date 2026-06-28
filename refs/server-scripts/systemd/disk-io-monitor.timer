@@ -1,0 +1,14 @@
+# 对应设备 /etc/systemd/system/disk-io-monitor.timer
+# 来源: docs/troubleshooting.md §7.10.3 (P2-3 disk I/O 统计)
+# 频率: 10min
+
+[Unit]
+Description=Run disk-io-monitor every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Unit=disk-io-monitor.service
+
+[Install]
+WantedBy=timers.target

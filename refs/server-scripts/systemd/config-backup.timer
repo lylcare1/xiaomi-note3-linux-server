@@ -1,0 +1,14 @@
+# 对应设备 /etc/systemd/system/config-backup.timer
+# 来源: docs/troubleshooting.md §7.10.1 (P2-1 配置自动备份)
+# 频率: weekly Monday 03:00
+
+[Unit]
+Description=Run config-backup weekly (Monday 03:00)
+
+[Timer]
+OnCalendar=Mon 03:00:00
+Persistent=true
+Unit=config-backup.service
+
+[Install]
+WantedBy=timers.target

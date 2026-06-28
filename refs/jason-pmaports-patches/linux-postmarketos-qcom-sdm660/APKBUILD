@@ -1,0 +1,91 @@
+# Kernel config based on: arch/arm64/configs/sdm660_defconfig
+maintainer="Alexey Minnekhanov <alexeymin@minlexx.ru>"
+_flavor="postmarketos-qcom-sdm660"
+pkgname=linux-$_flavor
+pkgver=6.19.10
+pkgrel=2
+pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon 660 SoC"
+arch="aarch64"
+url="https://kernel.org/"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+	"
+makedepends="
+	bison
+	clang
+	findutils
+	flex
+	lld
+	llvm
+	openssl-dev
+	perl
+	postmarketos-installkernel
+	python3
+	zstd
+	"
+
+_tag="v$pkgver-sdm660"
+
+source="
+	linux-$_tag.tar.gz::https://github.com/sdm660-mainline/linux/archive/refs/tags/$_tag.tar.gz
+	config-$_flavor.aarch64
+	0001-dts-qcom-add-sdm660-xiaomi-jason.patch
+	0002-ath10k-wcn3990-skip-psmode.patch
+	0003-cpufreq-hw-sdm660.patch
+"
+
+_carch="arm64"
+
+# for some reason, the directory inside .tar.gz does not match tag name: leading
+#     "v" is missing, so we can't use $_tag here
+builddir="$srcdir/linux-$pkgver-sdm660"
+
+prepare() {
+	default_prepare
+	cp -v "$srcdir/config-$_flavor.$CARCH" "$builddir"/.config
+}
+
+build() {
+	unset LDFLAGS
+
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-$_flavor" all Image.gz
+}
+
+package() {
+	mkdir -p "$pkgdir"/boot
+
+	make modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir"/boot \
+		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir/boot/dtbs-tmp"
+
+	install -D "$builddir/arch/arm64/boot/Image.gz" \
+		"$pkgdir/boot/vmlinuz"
+
+	# Reduce package size, install only qcom SDM630/636/660 dtbs.
+	# This reduces .apk size from ~46 Mb to ~30 Mb.
+	mkdir -p "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sda660* "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sdm630* "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sdm636* "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sdm660* "$pkgdir"/boot/dtbs/qcom
+	rm -r "$pkgdir"/boot/dtbs-tmp
+
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+
+	install -D "$builddir/include/config/kernel.release" \
+		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+}
+sha512sums="
+c6368702c43de41649c233e600313c0118a3765780f2b4f6d4671a91d94eb60e16fb6168bd55e31c9ae73eb935d2d3b2552db765a0b4ccb77cf401b4ec7655bd  linux-v6.19.10-sdm660.tar.gz
+6ea634a3df48dc93713fc541e536deb0a2491ef68575cd7f0073d1efe9c1a4d4e86fd3784c9936d4d5244f11ea711481c3d4cbf1c40d2970e1b8909c59151ce1  config-postmarketos-qcom-sdm660.aarch64
+025e0b62016bbd970d2e56d6d294eebd1665f21f7e66f979bc5c158c183f697ea1673e7e69084083800d64e9160d4547c7767b9ca78ba926f5716f45ededcd9e  0001-dts-qcom-add-sdm660-xiaomi-jason.patch
+0ab66e0c2703632c043e01bd9495ea3fdb0ed4cf0403be259a22887ff1755fef201f97c156dce2d32b4c1a699fcc37d35223e42bbb32a0cbe82a3b78eb451984  0002-ath10k-wcn3990-skip-psmode.patch
+6bdcbbeaed1f0be4dc658e5e411149c848beae1b041f6d53aa764af5249a056a51fa2d1bb0e7f03a617289b1b1006afae5b4970187a33d253b04eb2c3861babf  0003-cpufreq-hw-sdm660.patch
+"

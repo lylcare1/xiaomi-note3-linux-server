@@ -1,0 +1,14 @@
+# 对应设备 /etc/systemd/system/fsck-check.timer
+# 来源: docs/troubleshooting.md §7.8.3 (P0-3 eMMC 自动 fsck)
+# 频率: 7d (每周一 00:00)
+
+[Unit]
+Description=Run fsck-check weekly (Monday 00:00)
+
+[Timer]
+OnCalendar=Mon 00:00:00
+Persistent=true
+Unit=fsck-check.service
+
+[Install]
+WantedBy=timers.target

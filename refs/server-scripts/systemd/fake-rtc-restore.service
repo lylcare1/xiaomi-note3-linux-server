@@ -1,0 +1,14 @@
+# 对应设备 /etc/systemd/system/fake-rtc-restore.service
+# 来源: docs/troubleshooting.md §7.9.4 (P1-4 FakeRTC 恢复)
+# 触发: 开机时运行; ConditionPathExists 保证仅在时间戳文件存在时执行
+
+[Unit]
+Description=Restore system time from /var/lib/fake-rtc-time if NTP not synced
+After=systemd-timesyncd.service
+Wants=systemd-timesyncd.service
+ConditionPathExists=/var/lib/fake-rtc-time
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/fake-rtc-restore.sh

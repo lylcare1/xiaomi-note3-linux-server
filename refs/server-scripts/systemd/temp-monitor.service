@@ -1,0 +1,10 @@
+# 对应设备 /etc/systemd/system/temp-monitor.service
+# 来源: docs/troubleshooting.md §7.9.2 (P1-2 温度监控告警)
+
+[Unit]
+Description=Temperature monitor (12 thermal zones)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/temp-monitor.sh

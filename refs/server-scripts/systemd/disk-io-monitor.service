@@ -1,0 +1,10 @@
+# 对应设备 /etc/systemd/system/disk-io-monitor.service
+# 来源: docs/troubleshooting.md §7.10.3 (P2-3 disk I/O 统计)
+
+[Unit]
+Description=Disk I/O statistics for mmcblk1 (eMMC)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/disk-io-monitor.sh

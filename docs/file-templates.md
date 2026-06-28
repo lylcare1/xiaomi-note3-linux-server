@@ -1,0 +1,372 @@
+# jason 移植 - 文件模板清单
+
+> 创建日期: 2026-06-27
+> 配套文档: [research-deep.md](./research-deep.md) (机制详解) + [port-plan.md](./port-plan.md) (执行计划)
+> 用途: 列出所有要新建/修改的文件及其完整内容,实现时直接复制粘贴
+
+## 1. 文件总览
+
+| # | 类型 | 路径 (相对项目根) | 说明 |
+|---|---|---|---|
+| 1 | 新建 | `refs/pmaports/device/testing/device-xiaomi-jason/APKBUILD` | 设备包构建脚本 |
+| 2 | 新建 | `refs/pmaports/device/testing/device-xiaomi-jason/deviceinfo` | 设备元信息 |
+| 3 | 新建 | `refs/pmaports/device/testing/device-xiaomi-jason/modules-initfs` | initramfs 模块列表 |
+| 4 | 新建 | `refs/pmaports/device/testing/firmware-xiaomi-jason/APKBUILD` | firmware 包 (首阶段空包) |
+| 5 | 新建 | `refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660/0001-dts-qcom-add-sdm660-xiaomi-jason.patch` | DTS patch |
+| 6 | 修改 | `refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660/APKBUILD` | 加 patch source |
+| 7 | 修改 | `refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660/config-postmarketos-qcom-sdm660.aarch64` | 改 1 处 config |
+
+## 2. 文件 1: device-xiaomi-jason/APKBUILD
+
+```sh
+# Reference: <https://postmarketos.org/devicepkg>
+maintainer="jason port <port@example.com>"
+pkgname=device-xiaomi-jason
+pkgdesc="Xiaomi Mi Note 3"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+
+# 注意: 首阶段不加 soc-qcom-sdm660-rproc (modem 不启用)
+depends="
+    firmware-xiaomi-jason
+    firmware-qcom-adreno-a530
+    linux-postmarketos-qcom-sdm660
+    mkbootimg
+    msm-firmware-loader
+    postmarketos-base
+    soc-qcom-sdm660
+"
+
+makedepends="devicepkg-dev"
+
+source="
+    deviceinfo
+    modules-initfs
+"
+
+build() {
+    devicepkg_build $startdir $pkgname
+}
+
+package() {
+    devicepkg_package $startdir $pkgname
+}
+
+# sha512sums 在文件创建后用 `abuild checksum` 自动生成
+sha512sums="
+<deviceinfo_sha512>  deviceinfo
+<modules-initfs_sha512>  modules-initfs
+"
+```
+
+**与 jasmine_sprout 的差异**:
+- pkgname: `device-xiaomi-jasmine_sprout` -> `device-xiaomi-jason`
+- pkgdesc: `Xiaomi Mi A2` -> `Xiaomi Mi Note 3`
+- depends: 去掉 `soc-qcom-sdm660-rproc` (首阶段不启 modem)
+- 其他保持一致
+
+## 3. 文件 2: device-xiaomi-jason/deviceinfo
+
+```sh
+# Reference: <https://postmarketos.org/deviceinfo>
+# Please use double quotes only. You can source this file in shell scripts.
+
+deviceinfo_format_version="0"
+deviceinfo_name="Xiaomi Mi Note 3"
+deviceinfo_manufacturer="Xiaomi"
+deviceinfo_codename="xiaomi-jason"
+deviceinfo_year="2017"
+deviceinfo_dtb="qcom/sdm660-xiaomi-jason"
+deviceinfo_append_dtb="true"
+deviceinfo_arch="aarch64"
+deviceinfo_flash_kernel_on_update="true"
+
+# Device related
+deviceinfo_drm="true"
+deviceinfo_chassis="handset"
+deviceinfo_screen_width="1080"
+deviceinfo_screen_height="1920"
+
+# Bootloader related
+deviceinfo_flash_method="fastboot"
+deviceinfo_flash_fastboot_partition_vbmeta="vbmeta"
+deviceinfo_generate_bootimg="true"
+deviceinfo_flash_pagesize="4096"
+deviceinfo_flash_offset_base="0x00000000"
+deviceinfo_flash_offset_kernel="0x00008000"
+deviceinfo_flash_offset_ramdisk="0x01000000"
+deviceinfo_flash_offset_second="0x00f00000"
+deviceinfo_flash_offset_tags="0x00000100"
+```
+
+**与 jasmine_sprout 的差异**:
+- `deviceinfo_name`: `Xiaomi Mi A2` -> `Xiaomi Mi Note 3`
+- `deviceinfo_codename`: `xiaomi-jasmine_sprout` -> `xiaomi-jason`
+- `deviceinfo_year`: `2018` -> `2017`
+- `deviceinfo_dtb`: `qcom/sdm660-xiaomi-jasmine` -> `qcom/sdm660-xiaomi-jason`
+- `deviceinfo_screen_height`: `2160` -> `1920` (jason 是 16:9, jasmine 是 18:9)
+
+## 4. 文件 3: device-xiaomi-jason/modules-initfs
+
+```
+msm
+panel-jdi-fhd-r63452
+qcom-spmi-rradc
+pmi8998_fg
+qcom_smbx
+qcom-spmi-haptics
+```
+
+**说明** (模块名来源: 各 driver 的 Makefile `obj-$(CONFIG_...)` 条目, 2026-06-27 核对):
+
+- `msm`: DRM MSM 核心 (display, 必需, `CONFIG_DRM_MSM=m`)
+- `panel-jdi-fhd-r63452`: jason 的 JDI R63452 panel driver (必需, `CONFIG_DRM_PANEL_JDI_R63452=m`, 必改 config)
+- `qcom-spmi-rradc`: PMIC RRADC (`CONFIG_QCOM_SPMI_RRADC=m`, driver `qcom-spmi-rradc.o`)
+- `pmi8998_fg`: **PM660** 燃料表 (注意: jason DTS 节点叫 `pm660_fg`, 但 compatible 共用 `qcom,pmi8998-fg`, driver 是 `qcom_pmi8998_fg.c`, 模块名 `pmi8998_fg`, `CONFIG_BATTERY_PMI8998_FG=m`)
+- `qcom_smbx`: **PM660** 充电器 (jason DTS 节点叫 `pm660_charger`, compatible `qcom,pm660-charger`, driver 是 `qcom_smbx.c`, 模块名 `qcom_smbx`, `CONFIG_CHARGER_QCOM_SMB2=m`)
+- `qcom-spmi-haptics`: PM660 振动马达 (compatible `qcom,pmi8998-haptics`+`qcom,spmi-haptics`, driver `qcom-spmi-haptics.o`, `CONFIG_INPUT_QCOM_SPMI_HAPTICS=m`)
+
+**模块名风格不一致的原因**: 各 driver Makefile 条目命名风格不同 (panel/rradc/haptics 用连字符, pmi8998_fg/qcom_smbx 用下划线), 必须按实际 `.o` 名填写, 否则 modprobe 找不到。
+
+**与 jasmine_sprout 的差异** (2026-06-27 修正, PMIC 驱动模块名其实完全相同):
+
+- 移除: `novatek-nvt-ts` (jason 触控未启用)
+- 替换: `panel-novatek-nt36672a` -> `panel-jdi-fhd-r63452` (jason 用 JDI panel, jasmine 用 Novatek)
+- 新增: `qcom-spmi-haptics` (jason DTS 启用 `pm660_haptics`, jasmine 未启用)
+- **保留不变**: `pmi8998_fg` / `qcom_smbx` / `qcom-spmi-rradc` (jason 与 jasmine 都用 PM660+PM660L, FG/charger compatible 共用 PMI8998 系列, driver 模块名相同)
+
+> **重要澄清** (2026-06-27 源码核查): jason DTS 的 `pm660_fg` / `pm660_charger` 节点虽然名字带 "pm660", 但 compatible 分别是 `qcom,pmi8998-fg` / `qcom,pm660-charger`, 对应的 driver 文件是 `qcom_pmi8998_fg.c` / `qcom_smbx.c` (与 jasmine_sprout 完全相同)。模块名是 `pmi8998_fg` / `qcom_smbx`, **不是** `pm660_fg` / `pm660_charger`。详见 [research-deep.md §10.3](./research-deep.md#103-pm660-pmic-节点-driver-对应)。
+
+## 5. 文件 4: firmware-xiaomi-jason/APKBUILD (首阶段空包)
+
+```sh
+maintainer="jason port <port@example.com>"
+pkgname=firmware-xiaomi-jason
+pkgver=1
+pkgrel=0
+pkgdesc="Firmware files for Xiaomi Mi Note 3 (jason) - minimal initial package"
+url="https://postmarketos.org"
+arch="aarch64"
+license="proprietary"
+options="!strip !check !archcheck !spdx !tracedeps pmb:cross-native"
+
+# 首阶段无 source: 所有必需组件由 mainline driver 直驱
+# - Debug UART (blsp1_uart2): 硬件直驱, 无 firmware
+# - Display (mdss_dsi0 + JDI panel): panel driver 直驱, 无 firmware
+# - USB peripheral (dwc3): 硬件直驱, 无 firmware
+# - eMMC (sdhc_1): 硬件直驱, 无 firmware
+# - GPU Adreno 512: a512_zap.mbn 缺失只 dev_warn, 不影响 display path
+# - Modem: 不启用 (首阶段决策)
+# - WiFi: 推迟到 P1 阶段
+
+package() {
+    mkdir -p "$pkgdir"
+}
+
+# P1 阶段添加 (WiFi 启用):
+# makedepends="qca-swiss-army-knife"
+# source="
+#     board-2.bin 来源 URL
+#     a512_zap.elf 来源 URL
+# "
+# package() {
+#     ath10k-fwencoder --create --features=... --set-wmi-op-version=tlv ...
+#     install -Dm644 firmware-5.bin -t "$pkgdir/lib/firmware/ath10k/WCN3990/hw1.0/"
+#     install -Dm644 board-2.bin -t "$pkgdir/lib/firmware/ath10k/WCN3990/hw1.0/"
+#     install -Dm644 a512_zap.elf "$pkgdir/lib/firmware/postmarketos/a512_zap.mbn"
+# }
+
+sha512sums=""
+```
+
+## 6. 文件 5: 0001-dts-qcom-add-sdm660-xiaomi-jason.patch
+
+**已确认** (2026-06-27): `v6.19.10-sdm660` tag **不包含** jason.dts, 必须完整 patch (DTS + Makefile 修改)。详见 [research-deep.md §8 Q3](./research-deep.md#q3-v61910-sdm660-tag-是否已包含-jasondts)。
+
+**附带确认**: `panel-jdi-fhd-r63452.c` driver 已在 tag 中 (Kconfig + Makefile 都已配置), 无需在 patch 中加入 driver, 只需在 config 中改 `CONFIG_DRM_PANEL_JDI_R63452=m`。
+
+### 6.1 完整 patch 内容
+
+```diff
+From: jason port <port@example.com>
+Date: 2026-06-27
+Subject: [PATCH] arm64: dts: qcom: add Xiaomi Mi Note 3 (jason)
+
+Add device tree for Xiaomi Mi Note 3 (jason) based on SDM660.
+Original DTS by Kernel114514 <Kernel114514@hotmail.com>.
+
+Signed-off-by: jason port <port@example.com>
+---
+ arch/arm64/boot/dts/qcom/Makefile                  |    1 +
+ arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts   |  542 ++++++++++++
+ 2 files changed, 543 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts
+
+diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
+index abc..def 100644
+--- a/arch/arm64/boot/dts/qcom/Makefile
++++ b/arch/arm64/boot/dts/qcom/Makefile
+@@ -XXX,YYY +1,2 @@
+ dtb-$(CONFIG_ARCH_QCOM) += sdm660-xiaomi-jasmine.dtb
++dtb-$(CONFIG_ARCH_QCOM) += sdm660-xiaomi-jason.dtb
+ dtb-$(CONFIG_ARCH_QCOM) += sdm660-xiaomi-lavender-boe.dtb
+
+diff --git a/arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts
+new file mode 100644
+index 0000000..abc
+--- /dev/null
++++ b/arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts
+@@ -0,0 +1,542 @@
++(此处粘贴 refs/jason-dts/jason.dts 全文, 共 542 行)
+```
+
+### 6.2 生成 patch 的具体步骤
+
+```bash
+# 1. 浅克隆 v6.19.10-sdm660 tag
+#    (国内 github 直连会 GnuTLS 失败, 用 ghfast.top 镜像前缀, 已验证可用)
+cd /tmp
+git clone --depth 1 --branch v6.19.10-sdm660 https://ghfast.top/https://github.com/sdm660-mainline/linux.git
+cd linux
+
+# 2. 检查 tag 是否已包含 jason.dts
+ls arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts 2>/dev/null && echo "已存在,只需 Makefile patch" || echo "需要完整 patch"
+
+# 3. 添加 DTS 文件 (若不存在)
+cp /home/lyl/Documents/system/XiaoMiNote3/refs/jason-dts/jason.dts \
+   arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts
+
+# 4. 修改 Makefile (找到 sdm660-xiaomi-jasmine 行附近)
+# 编辑 arch/arm64/boot/dts/qcom/Makefile, 在 sdm660-xiaomi-jasmine 后加一行:
+#   dtb-$(CONFIG_ARCH_QCOM) += sdm660-xiaomi-jason.dtb
+
+# 5. 提交并生成 patch
+git add arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts arch/arm64/boot/dts/qcom/Makefile
+git commit -m "arm64: dts: qcom: add Xiaomi Mi Note 3 (jason)
+
+Add device tree for Xiaomi Mi Note 3 (jason) based on SDM660.
+Original DTS by Kernel114514 <Kernel114514@hotmail.com>."
+
+git format-patch HEAD~1 -o /tmp/patches/
+
+# 6. 复制 patch 到 pmaports 目录
+cp /tmp/patches/0001-*.patch \
+   /home/lyl/Documents/system/XiaoMiNote3/refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660/
+```
+
+## 7. 文件 6: 修改 linux-postmarketos-qcom-sdm660/APKBUILD
+
+**修改点**: 在 source 列表中加入 patch 文件。
+
+### 7.1 原始 source
+
+```sh
+source="
+    linux-$_tag.tar.gz::https://github.com/sdm660-mainline/linux/archive/refs/tags/$_tag.tar.gz
+    config-$_flavor.$CARCH
+"
+```
+
+### 7.2 修改后 source
+
+```sh
+source="
+    linux-$_tag.tar.gz::https://github.com/sdm660-mainline/linux/archive/refs/tags/$_tag.tar.gz
+    config-$_flavor.$CARCH
+    0001-dts-qcom-add-sdm660-xiaomi-jason.patch
+"
+```
+
+### 7.3 在 sha512sums 中加入 patch 的 sha512
+
+```sh
+sha512sums="
+abf0ec97c2530ad3543a64019cefde3396c3361d7550513bf17948c6f4bf2621d88bb1947a519e8bddc97f1c6fdc7d12989cc8292a41805acac9f8f16f7a14df  linux-v6.19.10-sdm660.tar.gz
+489b4cc74e49164971e7467e2884a724d9e1be51edd0054c7e4c4d233bd5fd31e011e0b3e79d855d94f6980886675ab195130d6aa4c62592b9e981aca217884e  config-postmarketos-qcom-sdm660.aarch64
+<patch_sha512>  0001-dts-qcom-add-sdm660-xiaomi-jason.patch
+"
+```
+
+`<patch_sha512>` 用 `sha512sum 0001-dts-qcom-add-sdm660-xiaomi-jason.patch` 生成。
+
+## 8. 文件 7: 修改 config-postmarketos-qcom-sdm660.aarch64
+
+**修改点**: 仅 1 处。
+
+### 8.1 原始 (line 3946)
+
+```
+# CONFIG_DRM_PANEL_JDI_R63452 is not set
+```
+
+### 8.2 修改后
+
+```
+CONFIG_DRM_PANEL_JDI_R63452=m
+```
+
+**用 `=m` 而非 `=y` 的原因**: modules-initfs 中会加载 `panel-jdi-fhd-r63452` 模块,与 `=m` 配合。
+
+### 8.3 修改命令
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3/refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660
+sed -i 's/^# CONFIG_DRM_PANEL_JDI_R63452 is not set$/CONFIG_DRM_PANEL_JDI_R63452=m/' config-postmarketos-qcom-sdm660.aarch64
+
+# 验证修改:
+grep JDI_R63452 config-postmarketos-qcom-sdm660.aarch64
+# 预期: CONFIG_DRM_PANEL_JDI_R63452=m
+```
+
+## 9. 实现顺序 (推荐)
+
+按依赖关系排序,从底层到顶层:
+
+1. **C4** (改 config) — 1 行修改
+2. **C1+C2** (生成 patch) — 复制 DTS + 修改 Makefile + git format-patch
+3. **C3** (改 APKBUILD source) — 加 1 行 patch + 1 行 sha512
+4. **B2** (firmware 空包 APKBUILD) — 新建空包
+5. **B1** (device 包 3 个文件) — 新建 APKBUILD + deviceinfo + modules-initfs
+6. **A2** (pmbootstrap init) — 安装 pmbootstrap + 初始化工作区
+7. **D1** (pmbootstrap build) — 构建 (会自动 build 所有依赖)
+8. **D2** (fastboot boot 实测) — 不 flash, 临时启动验证
+
+每一步完成后用 `abuild checksum` 重新生成 sha512sums (对 device 包和 firmware 包)。
+
+## 10. 验证清单 (实现后自检)
+
+> 注: 本清单为初始设计,实际执行后有变更,详见下方"实测后差异"
+
+- [ ] ~~device-xiaomi-jason/APKBUILD 中 depends 不含 soc-qcom-sdm660-rproc~~ **实测后变更: 必须加入此依赖 (WiFi 依赖 modem 启动)**
+- [x] device-xiaomi-jason/deviceinfo 中 deviceinfo_dtb="qcom/sdm660-xiaomi-jason"
+- [x] device-xiaomi-jason/deviceinfo 中 deviceinfo_screen_height="1920" (不是 jasmine 的 2160)
+- [x] device-xiaomi-jason/modules-initfs 包含 `panel-jdi-fhd-r63452`
+- [x] device-xiaomi-jason/modules-initfs 不含 jasmine 的 `novatek-nvt-ts`/`panel-novatek-nt36672a` (但**保留** `pmi8998_fg`/`qcom_smbx`, 因 jason PM660 FG/charger 共用 PMI8998 driver, 模块名相同)
+- [x] device-xiaomi-jason/modules-initfs 模块名拼写正确: `pmi8998_fg`(非 `pm660_fg`) / `qcom_smbx`(非 `pm660_charger`) / `qcom-spmi-haptics`(非 `pm660_haptics`)
+- [x] firmware-xiaomi-jason/APKBUILD 首阶段为空包 (package() 只 mkdir)
+- [x] patch 文件存在且 `git apply --check` 通过
+- [x] APKBUILD source 中加入 patch 文件名
+- [x] sha512sums 中加入 patch 的 sha512
+- [x] config 中 `CONFIG_DRM_PANEL_JDI_R63452=m` (不是 `is not set`)
+- [x] 所有新建文件的 license 字段正确 (MIT for device, proprietary for firmware)
+- [x] maintainer 字段已填 (jason port)
+
+### 10.1 实测后差异 (2026-06-28)
+
+实际执行后,与初始设计的差异:
+
+| 初始设计 | 实际执行 | 原因 |
+|---|---|---|
+| depends 不含 soc-qcom-sdm660-rproc | **必须加入** | WiFi (ath10k_snoc) 依赖 modem (remoteproc) 启动,否则 QRTR 缺失,ath10k 卡死 |
+| firmware-xiaomi-jason 首阶段为空包 | 保持空包 | WiFi firmware 实际在 modem 分区 (NON-HLOS.bin),不在 rootfs |
+| 借用 jasmine_sprout board-2.bin | 实际借用 + 还需刷 whyred NON-HLOS.bin | board-2.bin 只是校准数据,真正的 WiFi DSP firmware 在 modem 分区 |
+| DTS patch 只含 DTS + Makefile | **还需添加 qcom,msm-id/board-id/pmic-id** 属性 | ABL 验证需要这 3 个属性,否则拒绝启动 |
+
+详见:
+- [troubleshooting.md](./troubleshooting.md) §7 (ABL 修复 + WiFi firmware 修复)
+- [research-deep.md](./research-deep.md) §11 (首阶段完成总结)
+- [reflash-guide.md](./reflash-guide.md) (完整刷机流程)

@@ -1,0 +1,19 @@
+diff --git a/drivers/net/wireless/ath/ath10k/mac.c b/drivers/net/wireless/ath/ath10k/mac.c
+index 73aa93043..42948bda8 100644
+--- a/drivers/net/wireless/ath/ath10k/mac.c
++++ b/drivers/net/wireless/ath/ath10k/mac.c
+@@ -1959,6 +1959,14 @@ static int ath10k_mac_vif_setup_ps(struct ath10k_vif *arvif)
+ 
+ 	lockdep_assert_held(&arvif->ar->conf_mutex);
+ 
++	/* WCN3990 workaround: firmware crashes on set PS Mode command.
++	 * Skip it entirely to keep firmware stable. Powersave is disabled
++	 * which is acceptable for server use-case.
++	 * See: https://github.com/sdm660-mainline/linux/issues/75
++	 */
++	if (QCA_REV_WCN3990(ar))
++		return 0;
++
+ 	if (arvif->vif->type != NL80211_IFTYPE_STATION)
+ 		return 0;
+ 

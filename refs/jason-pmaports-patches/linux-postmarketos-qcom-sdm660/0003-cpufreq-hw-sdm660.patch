@@ -1,0 +1,160 @@
+From 9c5e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e Mon Sep 17 00:00:00 2001
+From: jason port <port@example.com>
+Date: Sat, 28 Jun 2026 13:00:00 +0800
+Subject: [PATCH] arm64: dts: qcom: sdm660: enable cpufreq-hw (OSM-HW v1)
+
+Add cpufreq@17d43000 node (compatible qcom,sdm660-cpufreq-hw) and CPU
+OPP tables so that the qcom-cpufreq-hw driver can register cpufreq
+policies for all 8 Kryo 260 cores.
+
+Topology:
+- cluster0 (cpu4-7, cpu@0-3): Kryo 260 Silver (Cortex-A53), max 1766 MHz
+- cluster1 (cpu0-3, cpu@100-103): Kryo 260 Gold (Cortex-A73), max 2208 MHz
+
+The driver reads the frequency/voltage LUT directly from OSM-HW
+hardware registers at 0x17d43000 (domain0) and 0x17d45800 (domain1).
+Static OPP tables here are only used as a hint - the driver will
+disable OPPs that don't exist in the HW LUT via dev_pm_opp_enable().
+Voltage is provided by the OSM-HW/CPRh hardware LUT, so no
+opp-microvolt is needed in the DTS.
+
+speedbin fuse is not used - all OPPs are unconditional. If speed bin
+support is needed later, add opp-supported-hw and a qfprom nvmem cell.
+
+Tested on Xiaomi Mi Note 3 (jason), SDM660, fw 1.0.0.591.
+---
+ arch/arm64/boot/dts/qcom/sdm660.dtsi | 96 ++++++++++++++++++++++++++--
+ 1 file changed, 90 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sdm660.dtsi b/arch/arm64/boot/dts/qcom/sdm660.dtsi
+index fd9bfc6a5..80063d843 100644
+--- a/arch/arm64/boot/dts/qcom/sdm660.dtsi
++++ b/arch/arm64/boot/dts/qcom/sdm660.dtsi
+@@ -40,6 +40,58 @@ cdsp_region: cdsp@94a00000 {
+ 	};
+ };
+
++&soc {
++	cpufreq_hw: cpufreq@17d43000 {
++		compatible = "qcom,sdm660-cpufreq-hw", "qcom,cpufreq-hw";
++		reg = <0x17d43000 0x1400>, <0x17d45800 0x1400>;
++		reg-names = "freq-domain0", "freq-domain1";
++
++		clocks = <&xo_board>, <&gcc GPLL0>;
++		clock-names = "xo", "alternate";
++
++		#freq-domain-cells = <1>;
++		#clock-cells = <1>;
++	};
++};
++
++/ {
++	/* Silver cluster (A53, cpu4-7) - max 1766 MHz */
++	cluster0_opp_table: opp-table-cluster0 {
++		compatible = "operating-points-v2";
++		opp-shared;
++
++		opp-300000000 { opp-hz = /bits/ 64 <300000000>; };
++		opp-576000000 { opp-hz = /bits/ 64 <576000000>; };
++		opp-748800000 { opp-hz = /bits/ 64 <748800000>; };
++		opp-998400000 { opp-hz = /bits/ 64 <998400000>; };
++		opp-1209600000 { opp-hz = /bits/ 64 <1209600000>; };
++		opp-1324800000 { opp-hz = /bits/ 64 <1324800000>; };
++		opp-1516800000 { opp-hz = /bits/ 64 <1516800000>; };
++		opp-1612800000 { opp-hz = /bits/ 64 <1612800000>; };
++		opp-1708800000 { opp-hz = /bits/ 64 <1708800000>; };
++		opp-1766400000 { opp-hz = /bits/ 64 <1766400000>; };
++	};
++
++	/* Gold cluster (A73, cpu0-3) - max 2208 MHz */
++	cluster1_opp_table: opp-table-cluster1 {
++		compatible = "operating-points-v2";
++		opp-shared;
++
++		opp-300000000 { opp-hz = /bits/ 64 <300000000>; };
++		opp-652800000 { opp-hz = /bits/ 64 <652800000>; };
++		opp-825600000 { opp-hz = /bits/ 64 <825600000>; };
++		opp-979200000 { opp-hz = /bits/ 64 <979200000>; };
++		opp-1132800000 { opp-hz = /bits/ 64 <1132800000>; };
++		opp-1363200000 { opp-hz = /bits/ 64 <1363200000>; };
++		opp-1536000000 { opp-hz = /bits/ 64 <1536000000>; };
++		opp-1747200000 { opp-hz = /bits/ 64 <1747200000>; };
++		opp-1843200000 { opp-hz = /bits/ 64 <1843200000>; };
++		opp-1996800000 { opp-hz = /bits/ 64 <1996800000>; };
++		opp-2150400000 { opp-hz = /bits/ 64 <2150400000>; };
++		opp-2208000000 { opp-hz = /bits/ 64 <2208000000>; };
++	};
++};
++
+ &adreno_gpu {
+ 	compatible = "qcom,adreno-512.0", "qcom,adreno";
+ 	operating-points-v2 = <&gpu_sdm660_opp_table>;
+@@ -148,49 +200,57 @@ opp-19200000 {
+ &cpu0 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <1024>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 1>;
++	operating-points-v2 = <&cluster1_opp_table>;
+ };
+
+ &cpu1 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <1024>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 1>;
++	operating-points-v2 = <&cluster1_opp_table>;
+ };
+
+ &cpu2 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <1024>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 1>;
++	operating-points-v2 = <&cluster1_opp_table>;
+ };
+
+ &cpu3 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <1024>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 1>;
++	operating-points-v2 = <&cluster1_opp_table>;
+ };
+
+ &cpu4 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <640>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 0>;
++	operating-points-v2 = <&cluster0_opp_table>;
+ };
+
+ &cpu5 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <640>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 0>;
++	operating-points-v2 = <&cluster0_opp_table>;
+ };
+
+ &cpu6 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <640>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 0>;
++	operating-points-v2 = <&cluster0_opp_table>;
+ };
+
+ &cpu7 {
+ 	compatible = "qcom,kryo260";
+ 	capacity-dmips-mhz = <640>;
+-	/delete-property/ operating-points-v2;
++	qcom,freq-domain = <&cpufreq_hw 0>;
++	operating-points-v2 = <&cluster0_opp_table>;
+ };
+
+ &gcc {
+--
+2.43.0
+

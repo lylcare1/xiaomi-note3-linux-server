@@ -1,0 +1,14 @@
+# 对应设备 /etc/systemd/system/temp-monitor.timer
+# 来源: docs/troubleshooting.md §7.9.2 (P1-2 温度监控告警)
+# 频率: 5min
+
+[Unit]
+Description=Run temp-monitor every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=temp-monitor.service
+
+[Install]
+WantedBy=timers.target

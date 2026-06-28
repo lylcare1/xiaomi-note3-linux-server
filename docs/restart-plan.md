@@ -1,0 +1,290 @@
+# jason 重做计划 - 永久启动 Linux + USB SSH 可用
+
+> 创建日期: 2026-06-28
+> 目标: 让设备开机即进入 Linux,USB SSH 可用,可复现
+> 配套: [AGENTS.md](../AGENTS.md) + [reflash-guide.md](./reflash-guide.md) + [troubleshooting.md](./troubleshooting.md)
+
+## 0. 背景与触发
+
+用户要求"不需要原来的安卓系统,开机就是 Linux"。已永久刷入 boot-nodebug.img 到 boot 分区 + xiaomi-jason.img 到 userdata 分区。但开机后 USB SSH 不通,反复试错 (v1/v2/v3 usb-ip-monitor 方案) 均未解决。
+
+用户决定**全部重新开始,重头梳理**,本文档为重做计划。
+
+## 1. 当前状态评估
+
+### 1.1 已完成且可复用的产物 (保留,不重做)
+
+| 产物 | 路径 | 状态 | 用途 |
+|---|---|---|---|
+| 原厂 28 分区备份 | `backups/original-jason-20260627-114354/` | ✅ 完整 6.7GB | 回退路径 |
+| 原厂 fastboot 包 | `jason_images_V8.5.9.0.NCHCNED_.../` | ✅ 完整 2.0GB | 一键回退 |
+| jason DTS + patch | `refs/jason-dts/jason.dts` + `refs/jason-pmaports-patches/` | ✅ 已验证 | 内核设备树 |
+| pmbootstrap 工作区 | `~/.local/var/pmbootstrap/` | ✅ 3 包构建完成 | 重新生成 rootfs |
+| boot-nodebug.img | `/tmp/boot-nodebug.img` (23MB) | ✅ 已永久刷入 boot 分区 | 开机即 Linux |
+| xiaomi-jason.img | `/tmp/xiaomi-jason-dense.img` (1.4GB) | ⚠️ 已永久刷入 userdata 但 USB 配置有问题 | rootfs 2 分区 |
+| whyred NON-HLOS.bin | 已永久刷入 modem 分区 | ✅ WiFi firmware 1.0.0.591 | WiFi 工作 |
+| H1/H2/H3 服务器脚本 | `refs/server-scripts/` (31 文件) | ✅ 待部署 | 服务器优化 |
+
+### 1.2 已验证可工作的能力 (2026-06-27 D2 阶段)
+
+- ✅ 设备能启动到 pmOS Linux 用户态 (kernel 6.19.10-sdm660)
+- ✅ WiFi 可连接 (ChinaNet-810, 192.168.1.12/24)
+- ✅ SSH 可通过 WiFi 局域网登录 (192.168.1.5 → 192.168.1.12)
+- ✅ 30 分钟长稳测试通过 (0% 丢包)
+- ✅ 高负载压力测试通过 (CPU 8 核满载 70.6°C 稳定)
+
+### 1.3 当前阻塞点
+
+**问题**: 永久启动 (开机即 Linux) 后,USB SSH 不通。
+
+**根因分析** (基于 dmesg + ping 监控定位):
+
+1. **udev 接口重命名**: systemd-udevd 把 initramfs 配置的 `usb0` 接口重命名为 `enxXX` (predictable naming)
+   - 证据: `dmesg` 显示 `cdc_ncm 5-1.1:1.0 enxe2e70bae6198: renamed from usb0`
+2. **NetworkManager 抢占 usb0**: NM 启动时 down 掉 usb0 但不配 IP
+   - 证据: ping 监控显示 IP 在启动后 14-35 秒丢失
+3. **NM 配置失效**: `99-usb0-unmanaged.conf` 配置 `interface-name:usb0`,但接口被重命名成 `enxXX` 后配置失效
+4. **systemd 启动卡住**: 之前 v2/v3 usb-ip-monitor service 在 sysinit 阶段启动,但 systemd 可能卡在更早阶段,service 没机会运行
+   - 证据: 用户反馈"卡在linux启动界面"
+
+### 1.4 之前试错方案失败原因
+
+| 方案 | 失败原因 |
+|---|---|
+| v1 usb-ip-monitor (multi-user.target) | service 启动太晚,NM 已经 down 掉 usb0 |
+| v2 usb-ip-monitor (sysinit.target, DefaultDependencies=no) | service 配置错误或 systemd 卡住,没启动 |
+| v3 usb-ip-monitor + .link 文件 + udev 规则 | .link 文件可能没生效,或 systemd 仍卡住 |
+
+**核心教训**: 反复在 rootfs 上手动修改配置不可靠,需要系统化方案。
+
+## 2. 重做方案对比
+
+### 方案 A: 重新构建 rootfs (推荐)
+
+**思路**: 在 pmbootstrap 工作区创建一个 USB 网络配置包,集成到 rootfs,重新生成 xiaomi-jason.img。
+
+**优势**:
+- 可复现: 所有配置在 pmbootstrap 工作区,可重新生成
+- 系统化: 通过包管理,不再手动修改 rootfs
+- 可维护: 升级 rootfs 时配置不丢失
+
+**劣势**:
+- 需要重新构建 (约 30-60 分钟)
+- 需要重新刷 userdata (丢失设备上的数据,但服务器脚本会重新部署)
+
+### 方案 B: 直接修复现有 rootfs (快速但不彻底)
+
+**思路**: 用 fastboot boot 启动 debug shell,通过 here-doc 写入完整的 USB 网络配置,重启验证。
+
+**优势**:
+- 快速 (10 分钟内可完成)
+- 不需要重新构建
+
+**劣势**:
+- 不可复现: 配置只在设备 rootfs 中,不在 pmbootstrap 工作区
+- 容易丢失: 升级 rootfs 时配置丢失
+- 已试错 3 次失败,风险高
+
+### 方案 C: 诊断优先 (先确认根因)
+
+**思路**: 修改 boot.img cmdline 加入 `systemd.mask=NetworkManager.service`,验证是否是 NM 导致 IP 丢失。如果是,再修复。
+
+**优势**:
+- 快速诊断根因
+- 不需要修改 rootfs
+
+**劣势**:
+- 只是诊断步骤,不解决根本问题
+- 需要修改 boot.img
+
+## 3. 推荐方案: A + C 组合
+
+**执行顺序**:
+1. **先执行 C** (5 分钟): 用 `systemd.mask=NetworkManager.service` 快速验证根因
+2. **如果确认是 NM 问题**, 执行 A (30-60 分钟): 重新构建 rootfs,集成 USB 网络配置包
+3. **如果确认不是 NM 问题**, 重新评估方案
+
+## 4. 方案 C 执行步骤 (诊断)
+
+### 4.1 创建诊断用 boot.img
+
+修改 boot-nodebug.img 的 cmdline,加入:
+- `systemd.mask=NetworkManager.service` (禁用 NM)
+- `systemd.show_status=true` (显示启动状态)
+- `systemd.log_level=debug` (调试日志)
+- `systemd.log_target=console` (日志输出到 console)
+
+### 4.2 启动并监控
+
+```bash
+sudo fastboot boot /tmp/boot-diagnose.img
+sleep 30
+ping -c 5 172.16.42.1
+# 如果持续可达,确认 NM 是元凶
+# 如果仍不可达,systemd 启动卡在其他地方
+```
+
+## 5. 方案 A 执行步骤 (重新构建 rootfs)
+
+### 5.1 创建 USB 网络配置包
+
+在 pmbootstrap 工作区创建新包 `usb-network-jason`:
+
+```
+refs/pmaports/device/testing/usb-network-jason/
+├── APKBUILD
+├── setup-usb-gadget.sh          # 配置 USB gadget + IP + DHCP
+├── setup-usb-gadget.service     # sysinit 阶段启动
+├── usb-ip-monitor.sh            # 持续监控重配
+├── usb-ip-monitor.service       # multi-user 阶段启动
+├── 10-usb0.link                 # 固定接口名为 usb0
+├── 99-usb-ncm.rules             # udev 备用规则
+└── 99-usb0-unmanaged.conf       # NM 不管理 usb0
+```
+
+### 5.2 关键配置文件内容
+
+#### 5.2.1 10-usb0.link (核心: 固定接口名)
+
+```ini
+[Match]
+Property=ID_USB_DRIVER=cdc_ncm
+
+[Link]
+Name=usb0
+```
+
+#### 5.2.2 setup-usb-gadget.service (sysinit 阶段)
+
+```ini
+[Unit]
+Description=Setup USB gadget network
+DefaultDependencies=no
+After=systemd-udevd.service systemd-modules-load.service
+Before=sysinit.target
+Wants=systemd-udevd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/setup-usb-gadget.sh
+
+[Install]
+WantedBy=sysinit.target
+```
+
+#### 5.2.3 99-usb0-unmanaged.conf (NM 不管 usb0)
+
+```ini
+[keyfile]
+unmanaged-devices=interface-name:usb0
+```
+
+### 5.3 修改 device-xiaomi-jason/APKBUILD
+
+加入依赖:
+```
+depends="
+    ...
+    usb-network-jason    # USB 网络配置包
+    dnsmasq              # DHCP server
+    ...
+"
+```
+
+### 5.4 重新构建
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+pmbootstrap build usb-network-jason
+pmbootstrap build device-xiaomi-jason
+pmbootstrap install
+```
+
+### 5.5 刷入并验证
+
+```bash
+# 刷入新 rootfs
+sudo fastboot flash userdata ~/.local/var/pmbootstrap/chroot_native/home/pmos/rootfs/xiaomi-jason.img
+
+# 重启 (boot 分区已是 boot-nodebug.img, 开机即 Linux)
+sudo fastboot reboot
+
+# 等 60 秒后验证
+sleep 60
+ping -c 5 172.16.42.1
+sshpass -p 1234 ssh user@172.16.42.1 "uname -a"
+```
+
+## 6. 验证标准
+
+- [ ] 设备开机自动启动到 Linux (不需要 fastboot boot)
+- [ ] USB SSH 可用 (`ssh user@172.16.42.1`)
+- [ ] WiFi 可连接 (`nmcli device wifi list` 能扫描)
+- [ ] WiFi 局域网 SSH 可用 (`ssh user@192.168.1.12`)
+- [ ] 重启后 USB SSH 仍可用 (验证持久性)
+- [ ] 服务器脚本 (H1/H2/H3) 部署成功
+
+## 7. 回退方案
+
+### 7.1 任何时候回退到原厂 Android
+
+```bash
+cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
+./flash_all.sh
+```
+
+### 7.2 回退到之前的 rootfs (临时 boot 模式)
+
+```bash
+sudo fastboot boot /tmp/boot-jason.img  # debug shell 模式
+```
+
+### 7.3 仅恢复 boot 分区 (回退到原厂 boot)
+
+```bash
+sudo fastboot flash boot backups/original-jason-20260627-114354/boot.img
+```
+
+## 8. 可复现性保证
+
+### 8.1 项目目录结构
+
+```
+XiaoMiNote3/
+├── AGENTS.md                    # 项目规则
+├── docs/
+│   ├── restart-plan.md          # 本文档
+│   ├── reflash-guide.md         # 刷机流程
+│   ├── troubleshooting.md       # 故障排查
+│   └── ...
+├── refs/
+│   ├── pmaports/                # pmOS 包源 (含 jason 设备包)
+│   │   └── device/testing/
+│   │       ├── device-xiaomi-jason/
+│   │       ├── firmware-xiaomi-jason/
+│   │       ├── linux-postmarketos-qcom-sdm660/
+│   │       └── usb-network-jason/  # 新增 USB 网络配置包
+│   ├── jason-dts/               # jason DTS 源
+│   └── server-scripts/          # H1/H2/H3 服务器脚本
+├── backups/                     # 原厂 28 分区备份
+├── scripts/                     # 备份/测试脚本
+└── jason_images_V8.5.9.0.../    # 原厂 fastboot 包
+```
+
+### 8.2 从零复现步骤
+
+1. 克隆项目仓库
+2. `pmbootstrap init` (选 jason 设备)
+3. 复制 `refs/pmaports/device/testing/*` 到 pmbootstrap 工作区
+4. `pmbootstrap build` 所有包
+5. `pmbootstrap install` 生成 xiaomi-jason.img
+6. `fastboot flash userdata xiaomi-jason.img`
+7. `fastboot flash boot boot-nodebug.img`
+8. `fastboot flash modem NON-HLOS-whyred.bin` (WiFi firmware)
+9. `fastboot reboot`
+10. SSH 部署 server-scripts/
+
+## 9. 下一步
+
+执行本计划,先做方案 C (诊断),再根据结果决定是否执行方案 A (重新构建)。

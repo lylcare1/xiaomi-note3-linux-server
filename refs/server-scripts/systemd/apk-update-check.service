@@ -1,0 +1,11 @@
+# 对应设备 /etc/systemd/system/apk-update-check.service
+# 来源: docs/troubleshooting.md §7.9.1 (P1-1 APK 自动更新通知)
+
+[Unit]
+Description=Check APK pending updates (no auto-upgrade)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/apk-update-check.sh

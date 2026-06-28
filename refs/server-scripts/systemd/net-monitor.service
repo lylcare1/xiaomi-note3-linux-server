@@ -1,0 +1,11 @@
+# 对应设备 /etc/systemd/system/net-monitor.service
+# 来源: docs/troubleshooting.md §7.10.2 (P2-2 网络监控告警)
+
+[Unit]
+Description=Network monitor (wlan0/WiFi/gateway/external/DNS)
+After=network.target NetworkManager.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/net-monitor.sh

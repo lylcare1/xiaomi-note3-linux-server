@@ -1,0 +1,14 @@
+# 对应设备 /etc/systemd/system/net-monitor.timer
+# 来源: docs/troubleshooting.md §7.10.2 (P2-2 网络监控告警)
+# 频率: 5min
+
+[Unit]
+Description=Run net-monitor every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Unit=net-monitor.service
+
+[Install]
+WantedBy=timers.target

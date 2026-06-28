@@ -1,0 +1,409 @@
+# jason 移植调研报告
+
+> 完成日期: 2026-06-27
+> 调研目标: 评估 Xiaomi Mi Note 3 (jason) 移植 postmarketOS 的就绪度与可行路径
+> 调研者: AI agent
+> 状态: 调研完成,待执行实施
+
+## 1. 执行摘要 (TL;DR)
+
+**远超预期的乐观结论**:
+
+- jason 的设备树 (DTS) **已经由社区贡献者写好**,位于 `sdm660-mainline/linux` 仓库 `alexeymin/jason` 分支
+- jason 的 LCD panel driver (`panel-jdi-fhd-r63452.c`) **已经在上游 mainline kernel 中** (作者 Raffaele Tranquillini, 2021)
+- DTS 配置完整: GPU/DSI panel/WiFi WCN3990/BT/Modem/eMMC HS400/USB peripheral/电池/充电/按键/regulator 均已 enable
+- SDM660 通用内核包 `linux-postmarketos-qcom-sdm660` v6.19.10 已存在于 pmaports
+- 参考设备包齐全: jasmine_sprout (Mi A2), lavender (Redmi Note 7), clover (Mi PAD 4), platina (Mi 8 Lite) 均为同 SoC
+
+**实际工作量从"半原创移植"降到"集成现有社区成果"**。
+
+距离首阶段成功 (booting+shell+network+ssh) 仅差: 把 DTS 加入内核包 patch + 创建 device-xiaomi-jason 包 + 实测。
+
+## 2. pmOS 对 jason 的官方状态
+
+| 维度 | 状态 |
+|---|---|
+| pmOS Wiki 设备页 | 存在,标记 **"not booting"** |
+| Maintainer | 空缺 |
+| Contributors | 1 人 (Alexeymin, "Possible future port") |
+| pmaports 中 device-xiaomi-jason | **不存在**,需自行创建 |
+| Installation 文档 | 空白 |
+
+参考链接:
+- https://wiki.postmarketos.org/wiki/Xiaomi_Mi_Note_3_(xiaomi-jason)
+- jason 在 wiki 标注 Debug UART: GPIO 4,5 (blsp2_uart), TP708 RX, TP707 TX
+  - **注**: 实际 jason DTS 中 Debug UART 是 `blsp1_uart2`,与 wiki 描述不一致,需要二次确认 (可能 wiki 信息过时或针对不同 revision)
+
+## 3. SDM660 SoC mainline 支持情况
+
+`linux-postmarketos-qcom-sdm660` v6.19.10 包 (来自 sdm660-mainline 社区 fork):
+
+| 组件 | mainline 状态 |
+|---|---|
+| UART | ✅ Works |
+| Storage (UFS/eMMC) | ✅ Works |
+| Display (DSI) | ✅ Works |
+| Pinctrl | ✅ Works |
+| I2C / SPI | ✅ Works |
+| Thermal | ✅ Works |
+| WiFi (WCN3990 + ath10k_snoc) | ✅ Works |
+| Bluetooth (WCN3990 BT) | ✅ Works |
+| Video 解码 | ✅ Works |
+| CPU (SMP/cpufreq/cpuidle) | ⚠️ Partial |
+| GPU (Adreno 512) | ⚠️ Partial (KMS/fbcon OK, 3D 不完整) |
+| Audio | ⚠️ Partial |
+| Modem (rproc) | ⚠️ Partial |
+| GPS | ❌ Broken |
+| Suspend | ❌ Broken |
+
+社区仓库: https://github.com/sdm660-mainline/linux
+
+## 4. jason DTS 文件分析
+
+### 4.1 文件来源与位置
+
+- 仓库: `sdm660-mainline/linux`
+- 分支: `alexeymin/jason` (作者 Alexey Minnya,pmOS jason wiki 唯一 contributor)
+- 路径: `arch/arm64/boot/dts/qcom/sdm660-xiaomi-jason.dts`
+- 实际 DTS 作者: `Kernel114514 <Kernel114514@hotmail.com>` (Copyright 2026)
+- 本地副本: [refs/jason-dts/jason.dts](../refs/jason-dts/jason.dts) (11728 bytes)
+
+### 4.2 文件头与基本信息
+
+```
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+// Copyright (c) 2026, Kernel114514 <Kernel114514@hotmail.com>
+
+#include "sdm660.dtsi"
+#include "pm660.dtsi"
+#include "pm660l.dtsi"
+
+model = "Xiaomi Mi Note 3";
+compatible = "xiaomi,jason", "qcom,sdm660";
+chassis-type = "handset";
+```
+
+### 4.3 已 enable 的硬件节点 (与首阶段目标相关的)
+
+| 节点 | DTS 路径 | 说明 |
+|---|---|---|
+| Debug UART | `&blsp1_uart2` | 115200n8, **注意是 blsp1 不是 blsp2** (与 wiki 描述不符) |
+| Bluetooth UART | `&blsp2_uart1` + `qcom,wcn3990-bt` | WCN3990 BT |
+| GPU Adreno 512 | `&adreno_gpu` + `&adreno_gpu_zap` | firmware-name = "a512_zap.mbn" |
+| DSI Panel | `&mdss_dsi0` panel@0 | compatible = "jdi,fhd-r63452" |
+| Backlight | `&pm660l_wled` | 2 strings, 800kHz, 20mA limit |
+| WiFi WCN3990 | `&wifi` | 4 路 power supply 已配置 |
+| Modem | `&remoteproc_mss` | firmware "mba.mbn", "modem.mdt" |
+| USB | `&usb3` + `&usb3_dwc3` | dr_mode="peripheral", extcon_usb ID 检测 |
+| eMMC | `&sdhc_1` | HS400 enhanced strobe, supports-cqe |
+| SD card | `&sdhc_2` | 正确 disabled (jason 无 SD 槽) |
+| 电池 | `battery: battery` | 3500 mAh, 3.4-4.4V (与实际匹配) |
+| 充电 | `&pm660_charger` | monitored-battery = <&battery> |
+| 电量计 | `&pm660_fg` | FG + power-supplies 链接到 charger |
+| Haptics | `&pm660_haptics` | 振动马达 |
+| RRADC | `&pm660_rradc` | PMIC RR ADC |
+| Volume Up | `gpio-keys` + `&pm660l_gpios` | pm660l_gpio 7, GPIO_ACTIVE_LOW |
+| Volume Down | `&pon_resin` | KEY_VOLUMEDOWN |
+| Power key | `&pon_pwrkey` | 默认 |
+| QUSB2PHY | `&qusb2phy0` | USB2 PHY |
+| MMSS SMMU | `&mmss_smmu` | 显示子系统 IOMMU |
+| TLMM | `&tlmm` | gpio-reserved-ranges = <0 4>, <8 4> |
+| PMIC Regulators | `&rpm_requests` regulators-0/1 | 完整 PM660 + PM660L regulator 树 |
+| LCDB 固定 regulator | `lcdb_fixed` | 5.4V, panel 正负电源 emulation |
+| VPH_PWR | `vph_pwr` | 3.7V 主电源 |
+| Ramoops | `ramoops@b0000000` | 4MB, console+msg 各 2MB (panic 日志) |
+
+### 4.4 未配置但首阶段非必需的节点
+
+| 模块 | 状态 | 与 AGENTS.md 关系 |
+|---|---|---|
+| 触控屏 (touchscreen) | 缺节点 | SSH 服务器不需要 |
+| 相机 (camera) | 缺节点 | AGENTS.md "不要过早投入相机" |
+| 音频 (audio) | 缺节点 | AGENTS.md "不要过早投入音频" |
+| 指纹 (fingerprint) | 缺节点 | 非必需 |
+| NFC | 缺节点 | 非必需 |
+| IR blaster | 缺节点 | 非必需 (jason 有 IR 但非首阶段目标) |
+
+### 4.5 Firmware 依赖清单 (从 DTS 推导)
+
+| Firmware | 用途 | 来源建议 |
+|---|---|---|
+| `a512_zap.mbn` | Adreno 512 GPU zap shader | jason 原厂或 wayne-common (TheMuppets 仓库) |
+| `mba.mbn` | Modem 验证镜像 | jason 原厂 NON-HLOS.bin 内 (需 qca-swiss-army-knife 解包) |
+| `modem.mdt` + `modem.b00` | Modem 主固件 | 同上,从 NON-HLOS.bin 解包 |
+| `crnv21.bin` (BT) | WCN3990 BT firmware | 从 jason 原厂 BTFM.bin 解包 (DTS 中默认 commented,可后启用) |
+| `board-2.bin` (WiFi) | WCN3990 WiFi board 数据 | 可复用 firmware-xiaomi-jasmine_sprout 或 jason 原厂 |
+| `firmware-5.bin` (WiFi) | WCN3990 WiFi 主固件 | 可复用 jasmine_sprout 的 (ath10k-fwencoder 生成) |
+
+## 5. mainline kernel panel driver 验证
+
+### 5.1 文件确认
+
+- 路径: `drivers/gpu/drm/panel/panel-jdi-fhd-r63452.c` (torvalds/linux master)
+- 大小: 7114 bytes
+- SPDX: GPL-2.0-only
+- 作者: Raffaele Tranquillini <raffaele.tranquillini@gmail.com> (2021)
+- 生成方式: `linux-mdss-dsi-panel-driver-generator` 从 LineageOS msm8996 设备树自动生成
+- Kconfig: `CONFIG_DRM_PANEL_JDI_R63452`
+- Makefile: `obj-$(CONFIG_DRM_PANEL_JDI_R63452) += panel-jdi-fhd-r63452.o`
+
+### 5.2 of_device_id 匹配
+
+```c
+static const struct of_device_id jdi_fhd_r63452_of_match[] = {
+    { .compatible = "jdi,fhd-r63452" },
+    { /* sentinel */ }
+};
+```
+
+**与 jason DTS 中 `panel@0 { compatible = "jdi,fhd-r63452"; }` 完全匹配**。
+
+## 6. 参考设备包分析 (pmOS pmaports 已克隆)
+
+### 6.1 device-xiaomi-jasmine_sprout (Mi A2, 主参考模板)
+
+位置: [refs/pmaports/device/testing/device-xiaomi-jasmine_sprout/](../refs/pmaports/device/testing/device-xiaomi-jasmine_sprout/)
+
+- maintainer: Alexey Minnekhanov (与 sdm660-mainline jason 分支维护者同一人)
+- depends: `firmware-xiaomi-jasmine_sprout`, `firmware-qcom-adreno-a530`, `linux-postmarketos-qcom-sdm660`, `mkbootimg`, `msm-firmware-loader`, `postmarketos-base`, `soc-qcom-sdm660`, `soc-qcom-sdm660-rproc`
+- DTB: `qcom/sdm660-xiaomi-jasmine`
+- 屏: 1080x2160 (jason 是 1080x1920,需修改)
+- 触控: `novatek-nvt-ts`,面板: `panel-novatek-nt36672a` (jason 不同,需替换)
+- 充电: `qcom_smbx`,电量计: `pmi8998_fg` (jason DTS 用 `pm660_fg`,不同!)
+
+modules-initfs 内容:
+```
+msm
+novatek-nvt-ts
+panel-novatek-nt36672a
+pmi8998_fg
+qcom_smbx
+qcom-spmi-rradc
+```
+
+### 6.2 device-xiaomi-lavender (Redmi Note 7, 多面板参考)
+
+位置: [refs/pmaports/device/testing/device-xiaomi-lavender/](../refs/pmaports/device/testing/device-xiaomi-lavender/)
+
+- 三个面板子包: `kernel-boe`, `kernel-shenchao`, `kernel-tianma`
+- 三个 DTB: `sdm660-xiaomi-lavender-{boe,shenchao,tianma}`
+- 屏: 1080x2340
+- 用 `devicepkg_subpackage_kernel` 拆分子包
+- `deviceinfo_generate_extlinux_config="true"` (jasmine_sprout 无此项)
+
+modules-initfs (tianma 变种,与 jasmine_sprout 相同):
+```
+msm
+novatek-nvt-ts
+panel-novatek-nt36672a
+pmi8998_fg
+qcom_smbx
+qcom-spmi-rradc
+```
+
+modules-initfs (boe 变种):
+```
+msm
+panel-boe-td4320
+pmi8998_fg
+qcom_smbx
+qcom-spmi-rradc
+```
+
+### 6.3 firmware-xiaomi-jasmine_sprout (firmware 包参考)
+
+位置: [refs/pmaports/device/testing/firmware-xiaomi-jasmine_sprout/APKBUILD](../refs/pmaports/device/testing/firmware-xiaomi-jasmine_sprout/APKBUILD)
+
+- makedepends: `qca-swiss-army-knife` (QCA firmware 解包工具)
+- _commit (firmware 源): `b23003b2...` from gitlab.com/m.01001101.01010110
+- _muppets_commit (wayne-common firmware): `c7757f14...` from github.com/TheMuppets
+- 安装文件:
+  - `/lib/firmware/ath10k/WCN3990/hw1.0/firmware-5.bin` (用 ath10k-fwencoder 生成)
+  - `/lib/firmware/ath10k/WCN3990/hw1.0/board-2.bin`
+  - `/lib/firmware/postmarketos/a512_zap.mbn` (从 wayne-common 拷贝 `a512_zap.elf`)
+
+### 6.4 soc-qcom-sdm660 (通用 SoC 包)
+
+位置: [refs/pmaports/device/testing/soc-qcom-sdm660/](../refs/pmaports/device/testing/soc-qcom-sdm660/)
+
+- 共享 SDM630/636/660 通用配置
+- 子包 `soc-qcom-sdm660-rproc` 提供 modem/wifi 服务依赖 (bootmac, msm-modem, qcom-diag, rmtfs, tqftpserv)
+- 子包 `soc-qcom-sdm660-rproc-openrc` openrc 服务
+- 安装 `sdm660-adreno-quirks.sh` 到 `/etc/profile.d/`
+
+### 6.5 linux-postmarketos-qcom-sdm660 (SDM660 通用内核包)
+
+位置: [refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660/](../refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660/)
+
+- pkgver: 6.19.10 (主流 mainline)
+- _tag: `v6.19.10-sdm660` (sdm660-mainline 仓库的 tag)
+- source: 从 `https://github.com/sdm660-mainline/linux/archive/refs/tags/v6.19.10-sdm660.tar.gz` 拉取
+- 构建: LLVM/clang (非 GCC)
+- 安装 DTB 时拷贝 `sda660*`, `sdm630*`, `sdm636*`, `sdm660*` — **如果 jason DTS 加入 tag,会自动包含**
+- config 文件: [config-postmarketos-qcom-sdm660.aarch64](../refs/pmaports/device/testing/linux-postmarketos-qcom-sdm660/config-postmarketos-qcom-sdm660.aarch64)
+
+**重要**: 当前 v6.19.10-sdm660 tag 的 Makefile 中**不包含** `sdm660-xiaomi-jason.dtb`,需通过 patch 加入。
+
+## 7. jason partition layout (本地原厂固件确认)
+
+来源: [jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn/images/partition.xml](../jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn/images/partition.xml)
+
+- 类型: **非 A/B 设备** (有 ablbak/tzbak 等备份槽,但不是 A/B slot)
+- 写保护边界: 65536 KB
+- 关键分区大小:
+
+| 分区 | Size (KB) | 用途 |
+|---|---|---|
+| xbl / xblbak | 8192 | Secondary bootloader |
+| abl / ablbak | 2048 | Android bootloader |
+| tz / tzbak | 8192 | TrustZone |
+| hyp / hypbak | 1024 | Hypervisor |
+| rpm / rpmbak | 1024 | RPM |
+| pmic / pmicbak | 1024 | PMIC config |
+| devcfg / devcfgbak | 2048 | Device config |
+| modem | 196608 | Modem firmware (NON-HLOS.bin) |
+| dsp | 32768 | DSP (dspso.bin) |
+| bluetooth | 1024 | BT/FM firmware (BTFM.bin) |
+| keymaster / keymasterbak | 1024 | Keymaster |
+| cmnlib / cmnlibbak | 1024 | Common lib |
+| cmnlib64 / cmnlib64bak | 1024 | Common lib 64 |
+| storsec / storsecbak | 256 | Storage security |
+| persist | 65536 | 持久化校准数据 |
+| misc | 4096 | misc (boot flag 等) |
+| modemst1 / modemst2 | 8192 each | Modem 存储 |
+| fsg | 8192 | Modem 文件系统 |
+| boot | 65536 | Kernel + ramdisk |
+| recovery | 65536 | Recovery |
+| cache | 262144 | Cache |
+| system | 5242880 | Android system |
+| cust | 851968 | 定制分区 |
+| userdata | 12582912 | 用户数据 |
+| logo | 32768 | 开机 logo |
+| splash | 65536 | 开机 splash |
+
+回退路径: 已具备完整原厂 fastboot 镜像 (V8.5.9.0),通过 [flash_all.sh](../jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn/flash_all.sh) 可一键刷回原厂。
+
+## 8. 距离首阶段成功的差距
+
+| 完成定义要求 | 当前差距 | 优先级 |
+|---|---|---|
+| 设备可重复启动进入 Linux | ⚠️ 需把 DTS 加入 kernel patch + 创建 device 包 + 构建 boot.img + 实测 | P0 |
+| rootfs 可读写 | ✅ pmOS rootfs 默认满足 | - |
+| WiFi 可连接指定网络 | ⚠️ DTS 节点齐全,需 firmware + 实测 | P1 |
+| SSH 可从局域网登录 | ✅ USB peripheral mode + pmOS 默认满足 | - |
+| 基本系统信息采集 | ✅ 默认满足 | - |
+| 刷回/重刷/更新流程文档 | ⚠️ 原厂固件已具备,需补文档 | P1 |
+
+## 9. 风险评估
+
+| 风险 | 严重度 | 缓解方式 |
+|---|---|---|
+| 无 UART 调试串口 (用户决定不焊) | 中 | TWRP + fastboot 救回,失败时 boot.img 不写持久分区 |
+| WiFi 实际可用性未实测 | 低 | DTS 节点已配,platform 共性支持,firmware 复用 jasmine |
+| Modem 是否需要启动 (首阶段非必需) | 低 | 首阶段禁用 modem,仅用 USB ethernet + WiFi |
+| 触控屏缺节点 | 低 | 首阶段不需要 |
+| jason DTS 在 alexeymin/jason 分支可能未充分测试 | 中 | 准备好回退到原厂 + 临时 boot 不 flash |
+| pmbootstrap 未安装 | 低 | 用 apk add pmbootstrap 或 pip install |
+| GitHub 网络不稳 (克隆大仓库慢) | 中 | 用 sparse-checkout 或直接 curl 拉单文件 |
+
+## 10. UART 调试豁免说明 (与 AGENTS.md 优先级 #2 的关系)
+
+AGENTS.md 优先级 #2 要求"串口/日志/调试能力",但用户已明确选择**不焊接 UART**,理由:
+- 拆机焊接需要工具和操作
+- jason 可靠 TWRP + fastboot 救回
+- 临时 boot 不 flash 持久分区可降低风险
+
+**豁免措施**:
+1. 启动失败时使用 `fastboot boot <twrp.img>` 临时启动 TWRP 检查
+2. boot.img 永远先 `fastboot boot` 不 `fastboot flash`,验证通过后再 flash
+3. 配置内核启用 ramoops (DTS 中已配置 4MB ramoops@b0000000) — panic 后可通过 TWRP 读取
+4. 启动参数加 `pmos.debug` 或 `init=/bin/sh` 增强日志
+5. 保留原厂 boot.img 备份,任何时候可 `fastboot flash boot boot_orig.img` 恢复
+
+## 11. 推荐路径与下一步
+
+### 推荐路径: 集成现有社区成果 (非原创移植)
+
+工作量估计: 创建 4 个新文件 + 修改 2 个现有文件 + 实测调试
+
+### 实施清单 (优先级排序)
+
+1. **P0 - 备份当前 jason 分区** (AGENTS.md 强制要求可回退)
+   - 临时 boot TWRP
+   - dd 备份所有关键分区到 `backups/original-jason-YYYYMMDD/`
+   - 至少: boot, recovery, system, userdata, persist, modem, modemst1, modemst2, fsg, misc, cust, cache
+
+2. **P0 - 创建 device-xiaomi-jason device 包**
+   - 复制 [device-xiaomi-jasmine_sprout/](../refs/pmaports/device/testing/device-xiaomi-jasmine_sprout/) 改造
+   - 新位置: `refs/pmaports/device/testing/device-xiaomi-jason/`
+   - 修改 APKBUILD: pkgname, depends (firmware-xiaomi-jason)
+   - 修改 deviceinfo: codename="xiaomi-jason", name="Xiaomi Mi Note 3", year=2017, dtb="qcom/sdm660-xiaomi-jason", screen 1080x1920
+   - 修改 modules-initfs: 移除 novatek-nvt-ts / panel-novatek-nt36672a / pmi8998_fg / qcom_smbx (jason DTS 用 pm660_fg + pm660_charger),保留 msm, qcom-spmi-rradc, 加 panel-jdi-fhd-r63452 (若编译为 module)
+
+3. **P0 - 把 jason DTS 加入 kernel 包**
+   - 修改 `linux-postmarketos-qcom-sdm660/APKBUILD` 的 source 增加 `sdm660-xiaomi-jason.dts`
+   - 增加 patch 修改 `arch/arm64/boot/dts/qcom/Makefile` 加入 `dtb-$(CONFIG_ARCH_QCOM) += sdm660-xiaomi-jason.dtb`
+   - 检查 config 中 `CONFIG_DRM_PANEL_JDI_R63452=y` (若 =m 需改 =y 或加 modules-initfs)
+
+4. **P0 - 创建 firmware-xiaomi-jason**
+   - 参考 `firmware-xiaomi-jasmine_sprout/`
+   - WCN3990 WiFi firmware 复用 jasmine_sprout (ath10k-fwencoder)
+   - a512_zap.mbn 从 jason 原厂或 wayne-common 拉取
+   - 从 jason 原厂 NON-HLOS.bin 解包 mba.mbn / modem.mdt / modem.b00 (用 qca-swiss-army-knife)
+   - 从 jason 原厂 BTFM.bin 解包 BT firmware
+
+5. **P0 - pmbootstrap init + 构建**
+   - 安装 pmbootstrap (`apk add pmbootstrap` 或 `pip install pmbootstrap`)
+   - `pmbootstrap init` (选 jason 设备)
+   - `pmbootstrap build` (构建 kernel + rootfs)
+   - `pmbootstrap install` (生成 boot.img + rootfs.img)
+
+6. **P0 - 实测启动**
+   - `fastboot boot` 临时 boot 不 flash
+   - 通过 USB ethernet ssh 连接验证
+   - 通过 dmesg / journalctl 检查启动日志
+
+7. **P1 - 启用 WiFi 实测**
+8. **P1 - 完善 flashing-guide.md**
+9. **P2 - 触控/相机/音频/基带等剩余外设**
+
+## 12. 实际执行结果 (2026-06-28 更新)
+
+> 本节为后续实际执行后的总结,与上面的"差距分析"形成对照
+
+| 完成定义要求 | 实际结果 | 详见 |
+|---|---|---|
+| 设备可重复启动进入 Linux | ✅ kernel 6.19.10-sdm660, DTS patch 添加 qcom,msm-id/board-id/pmic-id 通过 ABL 验证 | troubleshooting.md §7 |
+| rootfs 可读写 | ✅ ext4, /dev/loop0p2, 809.7M used / 49.3G total | - |
+| WiFi 可连接指定网络 | ✅ ChinaNet-810, 192.168.1.12/24, DHCP+IPv6 双栈 | troubleshooting.md §7.4-7.5 |
+| SSH 可从局域网登录 | ✅ 主机 192.168.1.5 → 设备 192.168.1.12 | troubleshooting.md §7.5 |
+| 基本系统信息采集 | ✅ dmesg/ip/journalctl/free/df 均可用 | - |
+| 刷回/重刷/更新流程文档 | ✅ docs/reflash-guide.md (417 行, 8 章) | reflash-guide.md |
+
+### 12.1 关键技术发现
+
+1. **ABL 必须验证 qcom,msm-id/board-id/pmic-id**: jason DTS 原作者未添加这 3 个属性,导致 ABL 拒绝启动。修复方法是在 DTS root node 添加。
+2. **jason 原厂 WiFi firmware 与 mainline ath10k 不兼容**: jason V11/V12 的 wlanmdsp.mbn 都是 1.0.0.533 (htt-ver 3.50),启动后 ~350ms fatal error PC=b00c749c。
+3. **Xiaomi 从未更新 jason 的 wlanmdsp.mbn**: jason V11 与 V12 fastboot 包的 wlanmdsp.mbn MD5 完全相同。
+4. **wlanmdsp.mbn 与其他 modem 固件组件强耦合**: 不能仅替换 wlanmdsp.mbn,会导致 modem watchdog timeout (与 mba.mbn/modem.b*/adsp.b*/cdsp.b* 版本不匹配)。
+5. **whyred V12 NON-HLOS.bin 可直接用于 jason**: 同为 SDM660 + WCN3990,完整 NON-HLOS.bin 替换后 WiFi firmware 升级到 1.0.0.591 (htt-ver 3.58),工作正常。
+6. **QMI 协商需要冷启动**: warm reboot 会导致 modem WLAN 进程状态不一致,必须用 `fastboot boot` 冷启动。
+
+### 12.2 与原计划的差异
+
+| 原计划 | 实际执行 |
+|---|---|
+| 首阶段不启用 modem (§9 风险评估) | **变更**: 实际启用了 modem (WiFi 依赖 modem DSP) |
+| WiFi firmware 借用 jasmine_sprout board-2.bin | **变更**: 还需替换完整 NON-HLOS.bin (whyred V12) |
+| 创建 firmware-xiaomi-jason 空包 | **保持**: 首阶段 firmware 包仍为空 (WiFi firmware 在 modem 分区,非 rootfs) |
+
+## 13. 参考资料
+
+- pmOS jason wiki: https://wiki.postmarketos.org/wiki/Xiaomi_Mi_Note_3_(xiaomi-jason)
+- pmOS SDM660 SoC wiki: https://wiki.postmarketos.org/wiki/Qualcomm_Snapdragon_660_(SDM660)
+- sdm660-mainline 仓库: https://github.com/sdm660-mainline/linux
+- jason DTS 分支: https://github.com/sdm660-mainline/linux/tree/alexeymin/jason/arch/arm64/boot/dts/qcom
+- pmaports 仓库: https://gitlab.postmarketos.org/postmarketOS/pmaports
+- mainline panel driver: https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/panel/panel-jdi-fhd-r63452.c
+- TWRP jason: https://twrp.me/xiaomi/xiaomiminote3.html
+- LineageOS jason: https://wiki.lineageos.org/devices/jason/

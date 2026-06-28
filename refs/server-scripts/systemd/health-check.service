@@ -1,0 +1,11 @@
+# 对应设备 /etc/systemd/system/health-check.service
+# 来源: docs/troubleshooting.md §7.8.5 (P0-5 系统健康检查)
+
+[Unit]
+Description=System health check (sshd/NM/wlan0/ath10k/gateway)
+After=network.target NetworkManager.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/health-check.sh

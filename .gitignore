@@ -1,0 +1,26 @@
+# 大文件 - 原厂备份和镜像 (6.7GB+)
+backups/
+logs/
+
+# 原厂 fastboot 包 (~2GB)
+jason_images_*/
+
+# 镜像文件 (boot.img, xiaomi-jason.img, TWRP 等大文件)
+*.img
+twrp-*.img
+
+# pmOS 上游 pmaports 仓库 (只保留我们自己的 jason patch, 不提交整个上游)
+refs/pmaports/
+
+# 构建产物
+*.apk
+*.tar.gz
+*.tar.xz
+
+# 编辑器和系统文件
+*.swp
+*.swo
+*~
+.DS_Store
+__pycache__/
+*.pyc

@@ -1,0 +1,14 @@
+# 对应设备 /etc/systemd/system/health-check.timer
+# 来源: docs/troubleshooting.md §7.8.5 (P0-5 系统健康检查)
+# 频率: 5min
+
+[Unit]
+Description=Run health-check every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=health-check.service
+
+[Install]
+WantedBy=timers.target

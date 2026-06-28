@@ -1,0 +1,44 @@
+maintainer="jason port <port@example.com>"
+pkgname=firmware-xiaomi-jason
+pkgver=1
+pkgrel=1
+pkgdesc="Firmware files for Xiaomi Mi Note 3 (jason) - WiFi (WCN3990/ath10k_snoc)"
+url="https://postmarketos.org"
+arch="aarch64"
+license="proprietary"
+options="!strip !check !archcheck !spdx !tracedeps pmb:cross-native"
+
+# ath10k firmware 生成工具
+makedepends="qca-swiss-army-knife"
+
+# board-data.bin: 从设备原厂 modem 分区提取的 WiFi board data
+# (原厂 bdwlan.bin, ath10k 原始 board data 格式, 安装为 board.bin)
+source="
+	board-data.bin
+"
+
+builddir="$srcdir"
+
+_fwdir="/lib/firmware"
+
+package() {
+	# 生成 ath10k firmware-5.bin (WCN3990, 与所有 SDM660 设备相同 flags)
+	ath10k-fwencoder --create \
+		--features=wowlan,no-nwifi-decap-4addr-padding,allows-mesh-bcast,mgmt-tx-by-ref,non-bmi,single-chan-info-per-channel \
+		--set-wmi-op-version=tlv \
+		--set-htt-op-version=tlv \
+		--set-fw-api=5
+
+	# 安装 firmware-5.bin (生成的)
+	install -Dm644 firmware-5.bin \
+		"$pkgdir/$_fwdir/ath10k/WCN3990/hw1.0/firmware-5.bin"
+
+	# 安装 board data (从设备原厂 modem 分区提取的 bdwlan.bin)
+	# ath10k 会先找 board-2.bin (容器), 没有则用 board.bin (单文件)
+	install -Dm644 board-data.bin \
+		"$pkgdir/$_fwdir/ath10k/WCN3990/hw1.0/board.bin"
+}
+
+sha512sums="
+840e40530c209b8a266f60efb3751086eea334ce2d4b3fe4c97167cb16103f5792384416c22dd6d0dae4b3b11b355938876495f18d47ed165edd770e1f29b920  board-data.bin
+"

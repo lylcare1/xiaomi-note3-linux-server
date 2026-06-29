@@ -991,3 +991,138 @@ journalctl --since "1 hour ago" -p warning
 | 过热保护 | 80°C 阈值未触发 (差 9.4°C) | ✓ 安全余量充足 |
 
 **服务器适用性结论**: jason 设备在 SDM660 + mainline 6.19.10 下可稳定运行高 CPU/网络负载,温度可控,网络稳定,适合作为长期运行的服务器主机。建议在高负载场景下保留 80°C 自动停机保护 (本测试脚本已实现)。
+
+## 9. WiFi QMI 握手修复 (2026-06-29,initramfs 模式)
+
+### 9.1 问题现象
+
+在 "stay in initramfs" 方案 (PID 1 = busybox ash /init_2nd.sh,不启动 systemd) 下:
+- ath10k_snoc 驱动成功绑定 `18800000.wifi`
+- dmesg 仅显示 `supply vdd-3.3-ch1 not found, using dummy regulator`
+- **无任何 QMI/WLFW 消息**
+- wlan0 接口不出现
+- 即使 `debug_mask=0x80000` (ATH10K_DBG_BOOT) 也无额外输出
+
+### 9.2 调研方法
+
+使用 5 个子 agent 并行调研:
+1. **pmaports 调研**: kernel config (CONFIG_ATH10K_SNOC=m, CONFIG_QRTR_SMD=m, CONFIG_QCOM_Q6V5_MSS=m), DTS wifi 节点 (4 个 regulator, status=okay)
+2. **历史文档调研**: 2026-06-28 WiFi 工作时是 systemd 模式 + 冷启动,modem 正常运行
+3. **设备实时状态调研**: modem (remoteproc2) 被 init_2nd.sh 主动停止,QRTR 只有 ADSP (node 5) 节点,无 modem 节点
+4. **内核源码调研**: ath10k_snoc 的 QMI 握手是异步的,由 WLFW 服务 (QRTR service 69/0x45) 上线触发;WLFW 运行在 modem 上
+5. **社区方案调研**: soc-qcom-sdm660-rproc 包提供 rmtfs + tqftpserv + qcom-diag + msm-modem 服务;modem diag 任务需要 diag-router 否则会饥饿 crash
+
+### 9.3 根因分析
+
+**完整因果链**:
+
+```
+[1] init_2nd.sh 主动停止 modem (echo stop > .../remoteproc2/state)
+    ↓ (基于"modem firmware 不稳定"的错误假设)
+[2] modem (remoteproc2) state = offline
+    ↓
+[3] modem 的 glink-edge 从未实例化
+    ↓
+[4] QRTR 无 modem 节点 (只有 ADSP node 5)
+    ↓
+[5] WLFW 服务 (运行在 modem 上) 不存在
+    ↓
+[6] ath10k_snoc 的 qmi_add_lookup(WLFW_SERVICE_ID=0x45) 永远等不到服务上线
+    ↓
+[7] 无 QMI 握手 → 无 wlan0
+```
+
+**二次根因** (即使启动 modem):
+```
+[1] systemd 不运行 → diag-router 服务未启动
+    ↓
+[2] modem diag 任务等待 diag-router 响应,超时
+    ↓
+[3] modem crash: "Task starvation: diag, ping: 4" (dog_hb.c:266)
+    ↓
+[4] modem 每 ~40s crash 一次,remoteproc 自动恢复
+    ↓
+[5] WLFW 服务无法在 crash 循环中稳定注册
+    ↓
+[6] ath10k_snoc 找不到稳定的 WLFW 服务
+```
+
+### 9.4 关键发现
+
+1. **WLFW 服务运行在 modem 上**: wlanmdsp.mbn (WiFi DSP firmware) 实际运行在 modem (Q6v5 MPSS) 子系统上,不是独立的 WiFi 芯片。ath10k_snoc 作为 QMI 客户端,向 modem 上的 WLFW 服务请求加载 WiFi firmware。
+
+2. **modem 固件来源**: modem 固件 (mba.mbn, modem.mdt, modem.bXX, wlanmdsp.mbn) 从 modem 分区 (NON-HLOS.bin = whyred V12) 通过 msm-firmware-loader 提取到 /lib/firmware/postmarketos/。wlanmdsp.mbn 版本 `WLAN.HL.1.0.1.c2-00538-QCAHLSWMTPLZ-1.214870.1` (fw 1.0.0.591, htt-ver 3.58)。
+
+3. **modem diag 任务需要 diag-router**: modem firmware 的 diag 任务会定期 ping 主机的 diag-router 服务。如果 diag-router 不运行,diag 任务饥饿,触发 watchdog timeout,modem crash。
+
+4. **rmtfs 需要 modemst 分区**: rmtfs 服务为 modem 提供持久化存储 (modemst1/modemst2/fsg 分区访问)。需要创建 `/dev/block/by-name/modemst1` 等 symlink (指向 `/dev/disk/by-partlabel/modemst1`)。
+
+### 9.5 修复方案
+
+修改 `/tmp/jason-initramfs/init_2nd.sh` 的模块加载 subshell (第 203-247 行):
+
+```sh
+# 1. 创建 modemst 分区 symlink (rmtfs 需要)
+mkdir -p /dev/block/by-name
+ln -sf /dev/disk/by-partlabel/modemst1 /dev/block/by-name/modemst1
+ln -sf /dev/disk/by-partlabel/modemst2 /dev/block/by-name/modemst2
+ln -sf /dev/disk/by-partlabel/fsg /dev/block/by-name/fsg
+
+# 2. 启动 ADSP
+echo start > /sys/class/remoteproc/remoteproc0/state
+sleep 5
+
+# 3. 启动 modem 支持服务 (必须在 modem 启动前运行)
+chroot /sysroot /usr/bin/rmtfs -r -P -s &
+chroot /sysroot /usr/bin/tqftpserv &
+chroot /sysroot /usr/bin/diag-router &
+sleep 3
+
+# 4. 启动 modem (WLFW 服务会在 modem 上运行)
+echo start > /sys/class/remoteproc/remoteproc2/state
+sleep 30  # 等待 WLFW 服务上线
+
+# 5. ath10k_snoc 自动完成 QMI 握手 (qmi_add_lookup 等待 WLFW 服务)
+# wlan0 自动出现,无需手动 unbind/bind
+```
+
+### 9.6 验证结果
+
+刷入新 boot.img 后,启动日志 (dmesg):
+```
+[  20.816640] Mount root partition (/dev/loop0p2) to /sysroot
+[  21.349409] sshd started from initramfs
+[  21.384704] Server ready - staying in initramfs
+[  26.394000] Loading Qualcomm modules...
+[  27.716342] Firmware copied to initramfs
+[  33.119492] ADSP state: running
+[  36.123018] Modem services started (rmtfs, tqftpserv, diag-router)
+[  36.123338] Modem starting (wait 30s for WLFW service)
+[  35.661581] ath10k_snoc: qmi chip_id 0x30214 chip_family 0x4001
+[  35.661675] ath10k_snoc: qmi fw_version 0x101c821a (1.0.0.591)
+[  38.325201] ath10k_snoc: firmware ver api 5 features wowlan,...
+[  38.377345] ath10k_snoc: htt-ver 3.58 wmi-op 4 htt-op 3
+[  66.134317] Modem state: running
+[  66.137271] wlan0 interface available!
+```
+
+WiFi 扫描结果 (wpa_cli scan_results):
+- 20+ 个网络可见
+- ChinaNet-810: 信号 -46, 2472 MHz
+- ChinaNet-810-5G: 信号 -41, 5200 MHz
+
+### 9.7 关键教训
+
+1. **不要盲目停止 remoteproc**: "modem firmware 不稳定" 的假设是错误的。whyred V12 NON-HLOS.bin (fw 1.0.0.591) 与 mainline ath10k_snoc 兼容。停止 modem 会导致 WiFi 完全不工作。
+
+2. **modem 需要用户态服务支持**: modem firmware 的 diag 任务需要 diag-router,否则会饥饿 crash。这是 mainline Linux 下 Qualcomm modem 的已知行为。
+
+3. **QMI 握手是异步的**: ath10k_snoc 的 probe 只注册 `qmi_add_lookup(WLFW)`,不主动发起握手。握手由 WLFW 服务上线触发。因此"驱动绑定但无 QMI 消息" = WLFW 服务不存在 = modem 未运行或 crash。
+
+4. **initramfs 模式下启动服务**: 使用 `chroot /sysroot /usr/bin/<service>` 可以在 pivot_root 前启动 rootfs 中的服务。pivot_root 后,这些进程继续运行,根目录自动变为新根。
+
+### 9.8 相关文件
+
+- `/tmp/jason-initramfs/init_2nd.sh` (修改: 第 203-247 行,模块加载 + 服务启动 + modem 启动)
+- `/home/lyl/Documents/system/XiaoMiNote3/scripts/deploy.sh` (构建 + 刷入 + 验证)
+- `/home/lyl/Documents/system/XiaoMiNote3/docs/progress.md` (执行日志)

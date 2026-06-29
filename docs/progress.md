@@ -102,3 +102,149 @@
 - **重做计划**: 执行 [docs/restart-plan.md](./restart-plan.md) 方案 (重新构建 rootfs + USB 网络配置包)
 - F3. 长期方案: 寻找 jason 设备对应的更新版 wlanmdsp.mbn, 避免长期依赖 whyred NON-HLOS.bin
 - G2. (可选) 网络服务部署 (Web/MQTT 等)
+
+---
+
+## 完全从0开始 v3 (2026-06-29)
+
+### 0. 触发与纠错
+
+用户要求"完全从0开始"。主 agent 先做社区调研(WebSearch),再调用 5 个子 agent 核查本地资产。
+
+**5 个子 agent 核查结论**:
+1. agent-1 (设备+备份): 设备在线 fastboot 模式 d1236a7b,原厂备份完整,但 **whyred NON-HLOS.bin 未在项目内备份** (设备 modem 分区有)
+2. agent-2 (pmbootstrap): 3.10.1 已装,4 包源在 `~/.local/var/pmbootstrap/cache_git/pmaports/device/testing/` 但大部分 untracked,zap 会丢失; chroot_native 已 zap; `/tmp/xiaomi-jason.img` 1.4GB 仍在
+3. agent-3 (4 包源): 4 包内容总体可用,需删除 `usb-network-jason/99-usb-ncm.rules` 占位,在 `kernel-cmdline.conf` 加 `net.ifnames=0`,去掉 `pmos.debug-shell`
+4. agent-4 (server-scripts): 8 timer + 8 脚本 + 5 配置完整,无需 doas→sudo 替换,缺 deploy.sh
+5. agent-5 (docs 审查): 11 文档,3 个需归档 (restart-plan.md/port-plan.md/file-templates.md),3 个需重写,5 个保留
+
+**关键纠错**: v2 文档(`restart-from-scratch-v2.md`)声称的 "switch_root 失败" 是**误诊**:
+- progress.md 记录 2026-06-28 时 WiFi SSH 已可用 (E3/F1/G1),说明 systemd 启动成功
+- 真实阻塞点是**永久刷入 boot.img 后 USB SSH 不通**(udev 重命名 + NM 抢占),不是 switch_root 失败
+- 因此 v2 阶段 0 (诊断 switch_root) 跳过
+
+### 1. 真实阻塞点
+
+USB SSH 不通的根因(综合社区调研 + agent 核查):
+1. `kernel-cmdline.conf` 不含 `net.ifnames=0`,systemd-udevd 把 usb0 重命名为 enxXX
+2. `.link` 文件需要 udev 提前匹配,NM 启动快于 udev 完成匹配时 .link 失效
+3. `kernel-cmdline.conf` 含 `pmos.debug-shell`(调试模式),不适合永久启动
+
+### 2. 执行计划 (6 阶段)
+
+**阶段 0 - 资产保护** (P0, 10 min):
+- 0.1 备份 pmaports 4 包源到 `backups/pmaports-jason-20260629/`
+- 0.2 从设备 modem 分区备份 whyred NON-HLOS.bin 到 `backups/whyred-non-hlos-20260629/`
+- 0.3 复制 `/tmp/xiaomi-jason.img` 到 `artifacts/xiaomi-jason-v1.img`
+- 0.4 在 pmbootstrap git 中 commit 当前 pmaports 改动
+
+**阶段 1 - 修复 4 个包源** (P0, 15 min):
+- 1.1 `usb-network-jason/`: 删除 `99-usb-ncm.rules`,同步 APKBUILD source/package()
+- 1.2 `device-xiaomi-jason/kernel-cmdline.conf`: 加 `net.ifnames=0`,去掉 `pmos.debug-shell`,降 loglevel 到 4
+- 1.3 `refs/jason-dts/jason.dts`: 补 ABL 属性(从 patch 0001 L51-53 复制),或在 README 加注"patch 0001 为权威"
+- 1.4 `usb-network-jason/APKBUILD`: depends 显式加 `dnsmasq`(当前为传递依赖)
+
+**阶段 2 - pmbootstrap 重置 + 重建** (P0, 60-90 min):
+- 2.1 `pmbootstrap zap` 清理脏工作区(已备份 pmaports)
+- 2.2 把 `refs/jason-pmaports-patches/` 4 包同步到 `~/.local/var/pmbootstrap/cache_git/pmaports/device/testing/`
+- 2.3 `pmbootstrap checksum` 更新校验值
+- 2.4 按依赖顺序 build: kernel → firmware → usb-network → device
+- 2.5 `pmbootstrap install --password 1234` 生成新 rootfs
+- 2.6 记录新 rootfs UUID
+
+**阶段 3 - 生成 boot.img** (P0, 5 min):
+- 3.1 `pmbootstrap export`
+- 3.2 用 `scripts/modify-bootimg-cmdline.py` 改 cmdline: 加 `net.ifnames=0`,去掉 `pmos.debug-shell`,对齐新 UUID
+- 3.3 验证 cmdline
+
+**阶段 4 - 刷入设备验证** (P0, 30 min):
+- 4.1 `fastboot flash userdata xiaomi-jason.img`
+- 4.2 `fastboot flash boot boot.img`
+- 4.3 `fastboot reboot`
+- 4.4 等 60 秒,`ping 172.16.42.1` + `ssh user@172.16.42.1`
+- 4.5 重启 3 次验证持久性
+
+**阶段 5 - 服务器脚本部署 + 长稳** (P1, 30-60 min):
+- 5.1 创建 `refs/server-scripts/deploy.sh` 一键部署脚本
+- 5.2 scp 推送到设备,执行 deploy.sh
+- 5.3 验证 8 个 timer active
+- 5.4 30 min 长稳测试
+
+**阶段 6 - 文档与可复现性** (P1, 30 min):
+- 6.1 归档过期文档到 `docs/archive/`
+- 6.2 更新 `progress.md` / `device-state-manifest.md` / `reflash-guide.md`(加 net.ifnames=0)
+- 6.3 在 `troubleshooting.md` 新增 §9 (USB SSH 修复总结,不是 switch_root 诊断)
+- 6.4 git commit 所有改动
+
+### 3. 范围与丢弃清单
+
+**保留(不动)**:
+- `backups/original-jason-20260627-114354/` (原厂 28 分区备份)
+- `jason_images_V8.5.9.0.../` (原厂 fastboot 包)
+- `twrp-3.7.0_9-0-jason.img`
+- `refs/jason-dts/jason.dts` (DTS 源)
+- `refs/jason-pmaports-patches/` (4 包源,作为权威源)
+- `refs/server-scripts/` (服务器脚本)
+- 设备 modem 分区现状 (whyred NON-HLOS.bin, WiFi fw 1.0.0.591)
+- 设备序列号 / 解锁状态
+
+**重做(从 0 重建)**:
+- pmbootstrap 工作区 (zap 后重新 init/apply/build/install)
+- rootfs 镜像 `xiaomi-jason.img`
+- boot.img
+- 设备上的 userdata + boot 分区
+
+**归档(移到 `docs/archive/`)**:
+- `docs/restart-plan.md` (v1, 已被 v2/v3 替代)
+- `docs/port-plan.md` (首阶段已完成)
+- `docs/file-templates.md` (含错误,已落地为实际包源)
+- `docs/d2-boot-checklist.md` (首阶段已完成)
+- `docs/restart-from-scratch-v2.md` (基于误诊,被 v3 替代)
+
+### 4. 执行日志
+
+(执行时按阶段追加到此章节)
+
+#### 2026-06-29 阶段 2-4 完成 + WiFi 修复
+
+**阶段 2-3 (构建 + boot.img)**: 复用已有 kernel + initramfs,修改 init_2nd.sh 实现 "stay in initramfs" 方案(PID 1 保持 busybox ash,不启动 systemd,USB NCM 稳定)。deploy.sh 自动化 build/flash/verify 流程。
+
+**阶段 4 (刷入验证)**:
+- boot.img 刷入 boot 分区,userdata 已有 rootfs
+- USB NCM 网络稳定 (172.16.42.1/16),SSH 可用
+- 62 个内核模块自动加载 (qrtr, qcom_q6v5_*, ath10k_snoc, mac80211 等)
+- ADSP (remoteproc0) 自动启动,QRTR 14 个服务可用
+
+**WiFi 修复 (关键突破)**:
+- **症状**: ath10k_snoc 驱动绑定 18800000.wifi,但无 QMI 握手消息,wlan0 不出现
+- **根因调研**: 用 5 个子 agent 并行调研 pmaports/文档/设备状态/内核源码/社区方案
+- **根因发现**: init_2nd.sh 主动停止 modem (`echo stop > .../remoteproc2/state`),基于"modem firmware 不稳定"的错误假设。实际上:
+  1. modem 停止 → modem glink-edge 不实例化 → QRTR 无 modem 节点
+  2. WLFW 服务 (QRTR service 69/0x45) 运行在 modem 上,modem 离线则 WLFW 不存在
+  3. ath10k_snoc 的 `qmi_add_lookup(WLFW)` 永远等不到服务上线
+- **二次根因**: 即使启动 modem,modem 也会每 ~40s crash (`Task starvation: diag, ping: 4`),因为 diag-router 服务未运行,modem diag 任务饥饿
+- **修复**: 修改 init_2nd.sh:
+  1. 创建 modemst 分区 symlink (rmtfs 需要)
+  2. 启动 ADSP
+  3. 启动 rmtfs + tqftpserv + diag-router (chroot /sysroot)
+  4. 启动 modem (`echo start > .../remoteproc2/state`)
+  5. 等待 30s,WLFW 服务自动上线
+  6. ath10k_snoc 自动完成 QMI 握手,wlan0 出现
+- **验证**: 刷入新 boot.img,66s 内 wlan0 available,QMI 握手成功 (fw 1.0.0.591, htt-ver 3.58),WiFi 扫描到 20+ 网络,ChinaNet-810 信号 -46
+
+**关键文件**:
+- `/tmp/jason-initramfs/init_2nd.sh` (修改: 删除 stop modem,添加服务启动 + start modem)
+- `/home/lyl/Documents/system/XiaoMiNote3/scripts/deploy.sh` (构建+刷入+验证)
+- `/tmp/jason-boot-initramfs.img` (23MB,已刷入)
+
+**当前设备状态**:
+- PID 1: `/bin/busybox ash /init_2nd.sh` (initramfs 模式)
+- USB NCM: 172.16.42.1/16,SSH on port 22
+- ADSP: running,Modem: running,CDSP: offline (无固件)
+- wlan0: 存在,QMI 握手成功,可扫描
+- 3 个用户态服务运行: rmtfs + tqftpserv + diag-router
+- 无 modem crash
+
+**待办**:
+- 阶段 5: 服务器脚本部署 (需适配 initramfs 模式,无 systemd timers)
+- 阶段 6: 归档过期文档,更新 device-state-manifest.md,git commit

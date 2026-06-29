@@ -249,6 +249,25 @@ echo "$LOG_PREFIX INFO: SSH on port 22, nc shell on port 2222" > /dev/kmsg
 
 echo "$LOG_PREFIX INFO: Module loader started in background (PID $!)" > /dev/kmsg
 
+# === Start WiFi in background (waits for wlan0 from module loader) ===
+# wpa_supplicant + udhcpc connect to ChinaNet-810 automatically on boot
+(
+    # Wait for wlan0 to appear (module loader starts it ~40s after boot)
+    for i in $(seq 1 60); do
+        if ip link show wlan0 >/dev/null 2>&1; then break; fi
+        sleep 1
+    done
+    if ! ip link show wlan0 >/dev/null 2>&1; then
+        echo "$LOG_PREFIX WARN: wlan0 not found after 60s, WiFi start skipped" > /dev/kmsg
+        exit 0
+    fi
+    sleep 3  # Wait for ath10k to fully initialize
+    chroot /sysroot /usr/local/bin/wifi-start.sh >/sysroot/var/log/wifi-start.log 2>&1
+    ip4=$(ip -4 addr show wlan0 2>/dev/null | grep -o 'inet [0-9.]*' | awk '{print $2}')
+    echo "$LOG_PREFIX INFO: wifi-start completed, wlan0 ip=${ip4:-none}" > /dev/kmsg
+) &
+echo "$LOG_PREFIX INFO: WiFi starter started in background (PID $!)" > /dev/kmsg
+
 # === Start interactive shell on tty1 (physical screen) ===
 # Gives user a usable terminal on the phone display
 (

@@ -2,7 +2,7 @@
 
 ## 项目规则
 
-- 可以调用多个子 Agent 工作,子 agent 也可以调用子 agent 工作
+- 如果需要搜索网页就用主agent,不需要搜索网页的就可以调用3个子Agent工作
 - 可复现性高
 - 每次完成任务都调用 askuserquestion 工具
 - 每次有进展成果,都要 git 到本地
@@ -18,8 +18,8 @@
 
 ## 常用指令
 
-- 从 recovery 切换到 fastboot: `adb reboot bootloader`
-- fastboot 切换到 recovery: `fastboot oem reboot-recovery`
+- 从 twrp 切换到 fastboot: `adb reboot bootloader`
+- fastboot 切换到 twrp: `fastboot oem reboot-recovery`
 
 ## 项目目标
 

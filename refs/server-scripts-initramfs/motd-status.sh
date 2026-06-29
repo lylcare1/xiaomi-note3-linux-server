@@ -41,7 +41,7 @@ echo "USB:    usb0 ip=${usb_ip:-none}"
 
 # Services (process checks)
 sshd_status="down"
-pgrep -x sshd >/dev/null 2>&1 && sshd_status="up"
+pgrep -f "sshd" >/dev/null 2>&1 && sshd_status="up"
 echo "SSH:    $sshd_status"
 
 # Server daemon

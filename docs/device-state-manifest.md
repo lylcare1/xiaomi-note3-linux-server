@@ -29,8 +29,8 @@
 | 分区用途 | 内核 + initramfs + 设备树 |
 | 当前内容 | jason-boot-initramfs.img (initramfs 模式, PID 1 = busybox ash) |
 | kernel 版本 | `6.19.10-sdm660` (sdm660-mainline 社区 fork, tag v6.19.10-sdm660) |
-| cmdline 特征 | **不含** `pmos.debug-shell` (正常自动启动) |
-| cmdline 关键参数 | `console=tty0 console=ttyMSM0,115200 fbcon=nodefer net.ifnames=0 loglevel=8 earlycon pmos_boot_uuid=<UUID> pmos_root_uuid=<UUID>` |
+| cmdline 特征 | **不含** `pmos.debug-shell` (正常自动启动); 含 `consoleblank=60 cpuidle.off=1` (防 DPU timeout 卡死) |
+| cmdline 关键参数 | `console=tty0 console=ttyMSM0,115200 fbcon=nodefer net.ifnames=0 loglevel=8 earlycon consoleblank=60 cpuidle.off=1 pmos_boot_uuid=<UUID> pmos_root_uuid=<UUID>` |
 | initramfs 特性 | stay-in-initramfs (不 switch_root 到 systemd, USB NCM 稳定) |
 | 镜像大小 | ~23 MB |
 | 刷入方式 | `fastboot flash boot /tmp/jason-boot-initramfs.img` |

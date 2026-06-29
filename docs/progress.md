@@ -371,3 +371,47 @@ USB SSH 不通的根因(综合社区调研 + agent 核查):
 - 不可 insmod `qcom-cpufreq-hw` — DT 缺节点会触发 panic (设备进 fastboot, 需 `fastboot reboot` 恢复)
 - BogoMIPS 在 ARMv8 不可靠 (显示 38.40 但实际 CPU 工作正常)
 - Alpine busybox `date +%N` 不支持纳秒, loop 测试需用其他方法测时间
+
+### cpufreq-hw 深度调研结论 (2026-06-30)
+
+**调研发现 (修正之前误判)**:
+- patch 0003 **已完全应用**到设备 DT: `cpufreq@17d43000` 节点存在于 `/proc/device-tree/soc@0/`, compatible = `qcom,sdm660-cpufreq-hw` + `qcom,cpufreq-hw`
+- cpu0-7 都有 `qcom,freq-domain = <0x8 0/1>` (phandle 0x8 = cpufreq_hw) 和 `operating-points-v2 = <0x10/0x9>` (cluster1/0 OPP 表)
+- mainline `qcom-cpufreq-hw` 驱动 **能匹配** `qcom,cpufreq-hw` fallback compatible (之前误判为不识别)
+- 模块未自动加载 (initramfs 无 udev), 手动 insmod 会 panic
+
+**cpufreq 不可用根因 (SDM660 OSM 编程问题)**:
+- SDM660 的 OSM (Optimized State Mapping) 硬件 **需要 OS 编程** (bootloader 不初始化, 与 SDM845+ 不同)
+- mainline `qcom-cpufreq-hw` 驱动 **不做 OSM 编程**, 仅读取 LUT
+- OSM 未初始化 → LUT 数据无效 → 驱动 probe 时读取垃圾数据 → 后续操作触发 oops → panic (panic_on_oops=1)
+- AngeloGioacchino OSM 编程 patch 系列 (v6, 2021-07, 9 个 patch, ~3000 行, 依赖 SAWv4.1 + CPR3) 至今 5 年未合并
+- pmOS 2025-10 SDM660 CPU 状态仍为 "Partial" (接受 no cpufreq)
+
+**当前状态 (接受上游限制)**:
+- cpufreq-dt: 失败 (-19 ENODEV), 因 CPU clk 未通过 CCF 暴露
+- qcom-cpufreq-hw: 模块存在但不可加载 (panic 风险)
+- gcc-sdm660 sync_state pending: 因 17d43000.cpufreq 消费者未绑定 (无害警告)
+- CPU 运行在 bootloader 设置的频率 (性能足够, 8 核 175 MB/s)
+
+### DPU timeout 卡死修复 (2026-06-30)
+
+**故障现象**:
+- 设备运行 ~50 分钟后 (3048s) 出现 `watchdog: Watchdog detected hard LOCKUP on cpu 3`
+- `[dpu error]enc33 frame done timeout` (DPU 显示编码器帧完成超时)
+- RCU stall 级联恶化, 系统完全无响应, 设备最终进 fastboot
+
+**根因分析**:
+1. **CPU hotplug 异常** (722s): CPU4-7 被 killed 后又重新 booted, `IRQ129: set affinity failed(-22)` — cpuidle bug
+2. **DPU frame done timeout**: 显示子系统帧完成超时, 可能与屏幕持续唤醒 + GPU firmware (a530_pm4.fw) 加载失败有关
+
+**修复 (cmdline 参数)**:
+- `consoleblank=60`: 60 秒后自动 blank 控制台, 减少 DPU 持续刷新负载
+- `cpuidle.off=1`: 禁用 CPU idle, 避免异常 CPU hotplug (IRQ129 affinity failed + CPU killed)
+
+**验证**:
+- 设备启动正常, 8 CPU 全部在线, 无异常 hotplug
+- cpuidle 已禁用 (`/sys/module/cpuidle/parameters/off` = 1)
+- consoleblank = 60
+- SSH 可达, WiFi 正常
+
+**注意**: a530_pm4.fw 加载失败是已知问题 (jason 是 Adreno 512, 但驱动请求 a530), 不影响显示功能。如后续仍有 DPU timeout, 可考虑 cmdline 加 `video=DSI-1:d` 完全禁用显示。

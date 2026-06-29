@@ -90,6 +90,7 @@ ramdisk_size = len(ramdisk)
 cmdline = (b'plymouth.ignore-serial-consoles plymouth.prefer-fbcon '
            b'loglevel=8 ignore_loglevel net.ifnames=0 earlycon '
            b'console=tty0 console=ttyMSM0,115200 fbcon=nodefer '
+           b'consoleblank=60 cpuidle.off=1 '
            b'pmos_boot_uuid=c3111c1f-5df3-4143-8005-7bc8abcb12c0 '
            b'pmos_root_uuid=55b176e9-7dba-4871-87cb-68314c590292 '
            b'pmos_rootfsopts=defaults')

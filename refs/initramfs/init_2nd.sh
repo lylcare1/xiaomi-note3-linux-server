@@ -268,6 +268,24 @@ echo "$LOG_PREFIX INFO: Module loader started in background (PID $!)" > /dev/kms
 ) &
 echo "$LOG_PREFIX INFO: Interactive shell on tty1 (screen) started" > /dev/kmsg
 
+# === Start server monitoring daemon (initramfs mode) ===
+# Replaces 8 systemd timers with a single loop-based scheduler
+# Runs in rootfs context (chroot /sysroot) for access to scripts/tools
+(
+    sleep 15  # Wait for sshd + rootfs to stabilize
+
+    # Start syslogd in rootfs context (for logger command)
+    chroot /sysroot /sbin/syslogd -O /var/log/messages -s 100 2>/dev/null
+    echo "$LOG_PREFIX INFO: syslogd started (rootfs context)" > /dev/kmsg
+
+    # Restore time from fake-RTC if available
+    chroot /sysroot /usr/local/bin/fake-rtc-restore.sh 2>/dev/null
+
+    # Start server-daemon (health-check, temp-monitor, net-monitor, etc.)
+    chroot /sysroot /usr/local/bin/server-daemon.sh &
+    echo "$LOG_PREFIX INFO: server-daemon started (PID $!)" > /dev/kmsg
+) &
+
 # Keep PID 1 alive forever
 # USB NCM, sshd, nc shell all running as background processes
 while true; do

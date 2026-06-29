@@ -1,0 +1,1299 @@
+# jason 完全从0开始执行计划 v2
+
+> 创建日期: 2026-06-29
+> 目标: 从零重建 jason (Xiaomi Mi Note 3) pmOS Linux 服务器, 优先解决 switch_root 失败 + USB SSH 不通两大阻塞点
+> 配套文档:
+> - [AGENTS.md](../AGENTS.md) - 项目规则
+> - [restart-plan.md](./restart-plan.md) - v1 重做计划 (历史背景)
+> - [progress.md](./progress.md) - 工作进展记录
+> - [device-state-manifest.md](./device-state-manifest.md) - 设备状态清单
+> - [troubleshooting.md](./troubleshooting.md) - 故障排查
+> - [reflash-guide.md](./reflash-guide.md) - 刷机流程
+> - [scripts/reproduce-from-scratch.sh](../scripts/reproduce-from-scratch.sh) - v1 复现脚本
+
+---
+
+## 0. 背景与目标
+
+### 0.1 历史进展 (已验证可工作)
+
+截至 2026-06-28, jason 设备已通过 pmOS 移植达成首阶段成功:
+
+- 设备可启动到 Linux 用户态 (kernel `6.19.10-sdm660`)
+- rootfs 可读写 (ext4, `/dev/loop0p2`)
+- WiFi 可连接 (ChinaNet-810, `192.168.1.12/24`, firmware `1.0.0.591`/htt-ver `3.58`)
+- SSH 可通过 WiFi 局域网登录 (`192.168.1.5` → `192.168.1.12`)
+- 30 分钟长稳测试 0% 丢包
+- 8 核满载压力测试峰值 `70.6°C`, 热调节生效
+- H1/H2/H3 服务器优化 (P0/P1/P2) 已部署到设备 rootfs
+
+### 0.2 当前核心阻塞点
+
+**最近一次会话诊断发现**:
+
+```
+switch_root /sysroot /sbin/init 失败
+```
+
+证据:
+- 所有前置步骤 (mount_subpartitions / resize_root_filesystem / mount_root_partition / resize_filesystem_after_mount) 成功
+- systemd 从未启动 (journal 不更新, random-seed 不更新)
+- initramfs 在 `exec switch_root /sysroot "$init"` 处死循环 (见 `refs/pmaports/main/postmarketos-initramfs/init_2nd.sh:106`)
+
+```sh
+# refs/pmaports/main/postmarketos-initramfs/init_2nd.sh:106
+exec switch_root /sysroot "$init"
+echo "$LOG_PREFIX ERROR: switch_root failed!" > /dev/kmsg
+echo "$LOG_PREFIX Looping forever..." > /dev/kmsg
+```
+
+### 0.3 历史次级阻塞点 (USB SSH 不通)
+
+永久启动 (开机即 Linux) 后, USB SSH 不通:
+- udev 把 `usb0` 重命名为 `enxXX` (predictable naming)
+- NetworkManager 抢占 `usb0` 后 down 掉, 不配 IP
+- v1/v2/v3 usb-ip-monitor 方案 + `.link` 文件 + udev 规则均失败
+
+**核心教训**: 反复在 rootfs 上手动修改配置不可靠, 必须系统化重建。
+
+### 0.4 "完全从0开始"的范围
+
+**重新构建 (范围)**:
+- pmbootstrap 工作区: `zap` 后重新 `init`
+- 4 个 pmOS 包: `usb-network-jason` / `firmware-xiaomi-jason` / `linux-postmarketos-qcom-sdm660` / `device-xiaomi-jason`
+- rootfs 镜像 `xiaomi-jason.img`
+- `boot.img` (含 cmdline 修正)
+- 设备上的 userdata 分区 (rootfs) + boot 分区
+
+**保留不动 (可复现性资产)**:
+- `backups/original-jason-20260627-114354/` (原厂 28 分区备份, 6.7GB)
+- `jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn/` (原厂 fastboot 包, 2.0GB)
+- `refs/jason-dts/jason.dts` + `refs/jason-pmaports-patches/` (已验证的 patch 源)
+- `refs/server-scripts/` (H1/H2/H3 服务器脚本)
+- modem 分区已刷入 whyred NON-HLOS.bin (WiFi firmware 1.0.0.591, 不需重刷)
+- 设备序列号 `d1236a7b`, Bootloader `unlocked=yes`
+
+### 0.5 完成定义
+
+- 设备开机自动进入 Linux (无需 `fastboot boot`)
+- rootfs 可读写, systemd 正常启动 (journal 持续更新)
+- USB SSH 可用: `ssh user@172.16.42.1` (开机 60s 内可达)
+- WiFi 可连接指定网络
+- WiFi 局域网 SSH 可用
+- 服务器脚本 (H1/H2/H3) 部署成功, 长稳运行
+- 具备刷回/重刷/更新标准流程文档与脚本
+
+---
+
+## 1. 阶段 0: 诊断 switch_root 失败 (最关键, 必须先做)
+
+> 目标: 定位 switch_root 失败的精确原因, 决定后续修复方案。
+> 预计耗时: 30-90 分钟
+> 优先级: **P0 - 阻塞所有后续阶段**
+
+### 1.0 前置: 准备诊断用 boot-debug.img
+
+利用现有 rootfs (已永久刷入 userdata), 仅生成带 debug-shell 的 boot.img 进入 debug shell, 不动 rootfs。
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 1.0.1 从 pmbootstrap 工作区导出现有 boot.img
+pmbootstrap export --output /tmp/jason-diag/
+
+# 1.0.2 修改 cmdline, 加入 debug-shell 与详细日志参数
+#   - 保留 pmos.debug-shell: 进入 debug shell (在 switch_root 之前)
+#   - 加 loglevel=7 ignore_loglevel: 最大日志
+#   - 加 systemd.log_level=debug systemd.log_target=console: systemd 调试 (若 systemd 启动)
+#   - 保留 pmos_boot_uuid / pmos_root_uuid 不变 (匹配现有 rootfs)
+BOOT_UUID="c5f7e8ec-1086-4198-beb1-5f9f7e21920c"
+ROOT_UUID="c79928f5-46b8-49de-8203-6124d458c7ce"
+NEW_CMDLINE="loglevel=7 ignore_loglevel earlycon console=ttyMSM0,115200 pmos.debug-shell pmos_boot_uuid=$BOOT_UUID pmos_root_uuid=$ROOT_UUID"
+
+python3 scripts/modify-bootimg-cmdline.py \
+    /tmp/jason-diag/boot.img \
+    /tmp/jason-diag/boot-debug-diag.img \
+    "$NEW_CMDLINE"
+
+# 1.0.3 验证 boot-debug-diag.img 生成
+ls -lh /tmp/jason-diag/boot-debug-diag.img
+sha256sum /tmp/jason-diag/boot-debug-diag.img
+```
+
+### 1.1 进入 debug shell (不动 rootfs)
+
+```bash
+# 1.1.1 设备进入 fastboot
+adb reboot bootloader   # 或手动音量下+电源
+
+# 1.1.2 用 fastboot boot 临时启动到 debug shell (不 flash, 不影响持久分区)
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot boot /tmp/jason-diag/boot-debug-diag.img
+
+# 1.1.3 等待 debug shell 出现 (USB 端会变成 serial gadget, 用 screen/minicom 连接)
+# 设备会在 initramfs 阶段停下, 提示符类似:
+#   (pmOS debug shell) #
+# 主机端识别 USB serial 设备:
+ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+# 用 screen 连接 (115200 8N1):
+# screen /dev/ttyACM0 115200
+```
+
+### 1.2 在 debug shell 中手动诊断 switch_root
+
+debug shell 进入时, `mount_subpartitions` 和 `mount_root_partition` 已经执行过 (init_2nd.sh 在 debug_shell hook 之前)。但 switch_root 还没执行, 可以手动验证。
+
+```sh
+# === 在设备 debug shell 中执行 ===
+
+# 1.2.1 查看当前挂载状态
+mount | grep -E 'sysroot|loop'
+# 期望:
+#   /dev/loop0p2 on /sysroot type ext4 (rw,relatime)
+#   /dev/loop0p1 on /sysroot/boot type ext2 (rw,relatime)
+
+# 1.2.2 验证 rootfs 子分区挂载正确
+ls /sysroot/
+# 期望: bin  boot  dev  etc  home  lib  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
+
+ls /sysroot/sbin/init
+# 期望: /sysroot/sbin/init (软链到 /usr/lib/systemd/systemd 或 /sbin/openrc-init)
+
+ls -la /sysroot/sbin/init
+# 期望: lrwxrwxrwx ... /sysroot/sbin/init -> /usr/lib/systemd/systemd
+
+# 1.2.3 验证 init 二进制可执行
+file /sysroot/sbin/init
+# 期望: symbolic link to '../usr/lib/systemd/systemd'
+file /sysroot/usr/lib/systemd/systemd
+# 期望: ELF 64-bit LSB pie executable, aarch64
+
+# 1.2.4 验证 rootfs 子分区 UUID 与 cmdline 匹配
+blkid /dev/loop0p1
+blkid /dev/loop0p2
+# 期望:
+#   /dev/loop0p1: UUID="c5f7e8ec-1086-4198-beb1-5f9f7e21920c" TYPE="ext2"
+#   /dev/loop0p2: UUID="c79928f5-46b8-49de-8203-6124d458c7ce" TYPE="ext4"
+
+cat /proc/cmdline
+# 期望: 含 pmos_boot_uuid=c5f7e8ec... pmos_root_uuid=c79928f5...
+```
+
+### 1.3 手动执行 switch_root 看精确错误
+
+```sh
+# === 在设备 debug shell 中执行 ===
+
+# 1.3.1 关键: switch_root 要求 /sysroot 是挂载点, 不能与 / 同设备
+mountpoint /sysroot
+# 期望: /sysroot is a mountpoint
+
+# 1.3.2 用 chroot 测试 init 是否能启动 (不实际 switch_root)
+chroot /sysroot /usr/lib/systemd/systemd --version
+# 期望: 输出 systemd 版本号 (如 256.x)
+# 如果报错: 缺库 / 文件损坏 / 架构不匹配
+
+# 1.3.3 手动 exec switch_root (复现失败)
+exec switch_root /sysroot /sbin/init
+# 观察: 报什么错? 退出码?
+#   - "can't find /sbin/init" → 软链断裂或文件丢失
+#   - "wrong fs type, bad option, bad superblock" → 文件系统损坏
+#   - 无输出直接挂死 → kernel panic (内核卡死)
+#   - "not a mountpoint" → sysroot 未正确挂载
+
+# 1.3.4 如果 1.3.3 挂死, 用替代方案测试:
+# 用 busybox switch_root (util-linux switch_root 可能与 busybox initramfs 不兼容)
+# 期望二进制路径: /usr/bin/switch_root 或 /bin/switch_root
+which switch_root
+ls -la $(which switch_root)
+# busybox 路径:
+busybox switch_root /sysroot /sbin/init
+```
+
+### 1.4 检查 ramoops / pstore (若 1.3 挂死)
+
+如果手动 switch_root 导致设备无响应 (kernel panic), 重启进 TWRP 抓 ramoops:
+
+```bash
+# 主机端
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot boot twrp-3.7.0_9-0-jason.img
+adb shell
+
+# === TWRP shell ===
+ls /sys/fs/pstore/
+cat /proc/ramoops_console 2>/dev/null | tail -100
+dmesg | tail -100
+```
+
+### 1.5 失败原因假设与对应方案
+
+根据诊断结果, 选择对应方案:
+
+| 诊断现象 | 根因 | 对应方案 |
+|---|---|---|
+| `/sysroot/sbin/init` 不存在或软链断裂 | rootfs 损坏或 install 时漏文件 | 阶段 1 重建 rootfs |
+| `chroot /sysroot /usr/lib/systemd/systemd --version` 报缺库 | rootfs 不完整 (apk 包未装齐) | 阶段 1 重建 rootfs |
+| `switch_root` 报 "not a mountpoint" | mount_root_partition 未把 sysroot 设为挂载点 | 方案 A: 改 init_2nd.sh 加 `mount --bind` |
+| `switch_root` (util-linux) 与 busybox initramfs 不兼容 | util-linux switch_root 二进制符号问题 | 方案 B: 改用 busybox switch_root |
+| `switch_root` 直接挂死 (panic) | kernel 不支持 switch_root 系统调用或 init 二进制异常 | 方案 C: 用 kexec 直接 boot 到 rootfs 内核 |
+| switch_root 成功但 systemd 不启动 | systemd 配置错误 (USB/network 服务卡 sysinit) | 阶段 1 重建时禁用问题服务 |
+
+### 1.6 替代方案 (若 switch_root 确实无法工作)
+
+#### 方案 A: 修改 init_2nd.sh 用 chroot + exec 替代 switch_root
+
+修改 `refs/pmaports/main/postmarketos-initramfs/init_2nd.sh:106`:
+
+```sh
+# 原代码
+exec switch_root /sysroot "$init"
+
+# 替换为
+cd /sysroot
+mkdir -p .initramfs
+mount --move /dev  .initramfs/dev  2>/dev/null
+mount --move /proc .initramfs/proc 2>/dev/null
+mount --move /sys  .initramfs/sys  2>/dev/null
+mount --move /run  .initramfs/run  2>/dev/null
+
+# 用 chroot 启动 init (PID 1 仍是 initramfs 的 /init, 但 exec 切到 systemd)
+exec chroot /sysroot "$init" "$@"
+```
+
+**注意**: 此方案不是真正的 switch_root, systemd 仍是 chroot 进程, 部分功能 (mount namespace) 可能受限。仅作 fallback。
+
+#### 方案 B: 重新构建 initramfs 用 busybox switch_root
+
+修改 `refs/pmaports/main/postmarketos-initramfs/APKBUILD`, 确保 `busybox-extras` 提供 `switch_root`, 而非 util-linux:
+
+```sh
+# init_2nd.sh:106
+exec switch_root /sysroot "$init"
+# 改为显式调用 busybox
+exec /bin/busybox switch_root /sysroot "$init"
+```
+
+#### 方案 C: 用 kexec 直接 boot 到 rootfs
+
+在 initramfs 中加载 rootfs 内的内核, 用 kexec 直接 boot:
+
+```sh
+# init_2nd.sh 末尾 (替换 switch_root)
+kexec -l /sysroot/boot/vmlinuz --initrd=/sysroot/boot/initramfs-linux.img \
+    --append="root=/dev/loop0p2 rw rootfstype=ext4"
+kexec -e
+```
+
+**注意**: 此方案需要 kernel 启用 `CONFIG_KEXEC`, 且需要把 rootfs 的 kernel/initramfs 也安装到 boot 子分区。
+
+### 1.7 验证 systemd 启动成功
+
+无论用哪种方案, 验证 systemd 真正起来:
+
+```sh
+# 在 debug shell 中 pmos_continue_boot 后, 或直接 ssh 进设备:
+# 1. PID 1 是 systemd (不是 initramfs 的 /init)
+cat /proc/1/comm
+# 期望: systemd
+
+# 2. systemd journal 在更新
+journalctl --list-boots
+# 期望: 至少有一条 boot 记录
+
+# 3. random-seed 在更新
+ls -la /var/lib/systemd/random-seed
+stat /var/lib/systemd/random-seed | grep Modify
+# 重启后再看, Modify 时间应更新
+
+# 4. systemctl 默认 target
+systemctl get-default
+# 期望: multi-user.target (服务器场景)
+```
+
+### 1.8 阶段 0 验证标准
+
+- [ ] 已成功进入 debug shell
+- [ ] 已手动验证 `/sysroot/sbin/init` 存在且可执行
+- [ ] 已尝试手动 `switch_root`, 记录精确错误
+- [ ] 已确认根因 (rootfs 损坏 / switch_root 不兼容 / kernel 问题 / 其他)
+- [ ] 已选定对应修复方案 (A/B/C/重建 rootfs)
+- [ ] 记录诊断结论到 `docs/troubleshooting.md` 新增章节 "§9 switch_root 失败诊断 (2026-06-29)"
+
+---
+
+## 2. 阶段 1: 重新构建 rootfs
+
+> 目标: 系统化重建 rootfs, 集成 USB 网络修复配置, 通过 pmbootstrap 包管理保证可复现。
+> 预计耗时: 60-120 分钟 (含 kernel 编译)
+> 前置: 阶段 0 完成, 已知 switch_root 失败原因
+> 优先级: P1
+
+### 2.1 清理 pmbootstrap 工作区 (保留 pmaports 改动)
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 2.1.1 备份当前 pmaports 改动 (以防万一)
+cp -a ~/.local/var/pmbootstrap/cache_git/pmaports/device/testing/ \
+    /tmp/jason-pmaports-backup-$(date +%Y%m%d)/
+
+# 2.1.2 zap pmbootstrap chroot (清理构建环境, 不动 pmaports git 仓库)
+pmbootstrap zap
+
+# 2.1.3 验证 pmaports/device/testing 下的 4 个 jason 包仍在 (zap 不应清空 git 仓库)
+ls ~/.local/var/pmbootstrap/cache_git/pmaports/device/testing/ | grep -E 'jason|sdm660'
+# 期望: device-xiaomi-jason firmware-xiaomi-jason linux-postmarketos-qcom-sdm660 usb-network-jason
+```
+
+### 2.2 修复 usb-network-jason 包 (核心: 解决 USB SSH 不通)
+
+重新设计 `usb-network-jason` 包, 不再依赖 `.link` 文件 + udev 规则的脆弱组合, 改用更稳健的方案:
+
+**新设计原则**:
+1. 全局禁用 predictable interface naming: kernel cmdline 加 `net.ifnames=0` (彻底根除 `enxXX` 重命名)
+2. USB 网络用 systemd-networkd 直配 (不走 NetworkManager, 避免 NM 抢占)
+3. WiFi (wlan0) 仍由 NetworkManager 管理 (互不干扰)
+4. gadget 配置脚本幂等, 兼容 pmOS 默认 `g1` gadget
+
+#### 2.2.1 修改 `refs/jason-pmaports-patches/usb-network-jason/` 包内容
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3/refs/jason-pmaports-patches/usb-network-jason/
+
+# 新增/修改文件列表:
+# ├── APKBUILD                     # 更新依赖 + 子包列表
+# ├── setup-usb-gadget.sh          # 已验证的幂等版本 (复用现有)
+# ├── setup-usb-gadget.service     # 已验证的 sysinit 阶段版本 (复用现有)
+# ├── usb-ip-monitor.sh            # 简化: 仅监控 IP, 不再重配 gadget
+# ├── usb-ip-monitor.service       # multi-user 阶段
+# ├── 10-usb0.network              # 新增: systemd-networkd 配置 usb0
+# ├── 20-wlan0.network             # 新增: 标记 wlan0 由 NM 管理
+# ├── 99-usb0-unmanaged.conf        # 保留: NM 不管理 usb0
+# └── 99-usb-ncm.rules             # 删除: 不再需要 (net.ifnames=0 已解决)
+```
+
+#### 2.2.2 新增 `10-usb0.network` (systemd-networkd 直配 usb0)
+
+```ini
+# /etc/systemd/network/10-usb0.network
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+DHCPServer=yes
+IPForward=yes
+IPMasquerade=yes
+
+[DHCPServer]
+PoolOffset=2
+PoolSize=253
+EmitDNS=yes
+DNS=172.16.42.1
+```
+
+#### 2.2.3 修改 APKBUILD 启用 systemd-networkd
+
+```sh
+# refs/jason-pmaports-patches/usb-network-jason/APKBUILD
+depends="
+    setup-usb-gadget
+    dnsmasq
+    systemd-networkd
+"
+# 启用 systemd-networkd 服务 (在 rootfs 构建时启用)
+subpackages="$pkgname-setup::noarch"
+install="$pkgname.post-install"
+
+# 在 $pkgname.post-install 中:
+#   systemctl enable systemd-networkd
+#   systemctl enable setup-usb-gadget
+#   systemctl enable usb-ip-monitor
+#   systemctl mask NetworkManager.service  # 不再全局 mask (要保留管 wlan0)
+```
+
+#### 2.2.4 简化 `usb-ip-monitor.sh` (仅监控 IP)
+
+```sh
+#!/bin/sh
+# usb-ip-monitor.sh
+# 用途: 持续监控 usb0 IP 配置, 若丢失则重配 (兜底)
+while true; do
+    if ip link show usb0 >/dev/null 2>&1; then
+        ip=$(ip -4 addr show usb0 | grep -oP 'inet \K[\d.]+')
+        if [ "$ip" != "172.16.42.1" ]; then
+            ip addr add 172.16.42.1/24 dev usb0 2>/dev/null
+            ip link set usb0 up 2>/dev/null
+        fi
+    fi
+    sleep 10
+done
+```
+
+### 2.3 修复 device-xiaomi-jason 包
+
+修改 `refs/jason-pmaports-patches/device-xiaomi-jason/APKBUILD`:
+
+```sh
+# 在 depends 中加入 usb-network-jason
+depends="
+    postmarketos-base
+    linux-postmarketos-qcom-sdm660
+    firmware-xiaomi-jason
+    firmware-qcom-adreno-a530
+    soc-qcom-sdm660
+    soc-qcom-sdm660-rproc
+    usb-network-jason          # 新增
+    dnsmasq                     # 新增 (DHCP server)
+    openssh
+    networkmanager              # 仅管 wlan0
+"
+
+# 在 deviceinfo 中确保 cmdline 含 net.ifnames=0
+# 修改 refs/jason-pmaports-patches/device-xiaomi-jason/deviceinfo:
+#   kernel_cmdline="... net.ifnames=0"
+```
+
+### 2.4 重新构建 4 个包
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 2.4.1 应用更新到 pmbootstrap 工作区
+scripts/apply-jason-patches.sh ~/.local/var/pmbootstrap/cache_git/pmaports
+
+# 单独复制 usb-network-jason (apply-jason-patches.sh 可能不含)
+cp -rp refs/jason-pmaports-patches/usb-network-jason \
+    ~/.local/var/pmbootstrap/cache_git/pmaports/device/testing/
+
+# 2.4.2 更新校验值
+pmbootstrap checksum \
+    usb-network-jason \
+    firmware-xiaomi-jason \
+    linux-postmarketos-qcom-sdm660 \
+    device-xiaomi-jason
+
+# 2.4.3 按依赖顺序构建
+# 顺序: usb-network-jason → firmware-xiaomi-jason → kernel → device
+for pkg in usb-network-jason firmware-xiaomi-jason \
+           linux-postmarketos-qcom-sdm660 device-xiaomi-jason; do
+    pmbootstrap build "$pkg" --force
+done
+
+# 如果 kernel 编译失败 (HTTP 502 等), 见 troubleshooting.md §8.3:
+#   手动下载 tarball 到 distfiles cache
+sudo curl -L --max-time 600 \
+    -o ~/.local/var/pmbootstrap/chroot_native/var/cache/distfiles/linux-v6.19.10-sdm660.tar.gz \
+    https://github.com/sdm660-mainline/linux/archive/refs/tags/v6.19.10-sdm660.tar.gz
+# 然后重试 build
+```
+
+### 2.5 pmbootstrap install 生成新 rootfs
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 2.5.1 重新安装 rootfs
+pmbootstrap install --password 1234
+
+# 2.5.2 验证新 rootfs 镜像生成
+ls -lh ~/.local/var/pmbootstrap/chroot_native/home/pmos/rootfs/xiaomi-jason.img
+# 期望: ~1.4GB
+
+# 2.5.3 备份新 rootfs UUID (可能变化, 后续 boot.img cmdline 要对齐)
+# 用 losetup 临时挂载查看子分区 UUID
+LOOP=$(echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S losetup -Pf --show \
+    ~/.local/var/pmbootstrap/chroot_native/home/pmos/rootfs/xiaomi-jason.img)
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S blkid "$LOOP"p1
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S blkid "$LOOP"p2
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S losetup -d "$LOOP"
+# 记录新的 BOOT_UUID / ROOT_UUID, 用于阶段 2 生成 boot.img
+```
+
+### 2.6 阶段 1 验证标准
+
+- [ ] 4 个包全部 build 成功 (无 502/patch 错误)
+- [ ] `pmbootstrap install` 生成 xiaomi-jason.img (~1.4GB)
+- [ ] 新 rootfs 子分区 UUID 已记录
+- [ ] usb-network-jason 包含 `10-usb0.network` 配置
+- [ ] device-xiaomi-jason depends 含 `usb-network-jason` + `dnsmasq`
+- [ ] deviceinfo cmdline 含 `net.ifnames=0`
+
+---
+
+## 3. 阶段 2: 生成 boot.img
+
+> 目标: 生成 2 个 boot.img: 正常启动版 + debug-shell 诊断版, cmdline 与新 rootfs UUID 对齐。
+> 预计耗时: 10 分钟
+> 前置: 阶段 1 完成, 已知新 rootfs UUID
+> 优先级: P1
+
+### 3.1 生成无 debug-shell 的 boot.img (正常启动)
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 3.1.1 从 pmbootstrap 导出 boot.img
+pmbootstrap export --output /tmp/jason-build-v2/
+ls -lh /tmp/jason-build-v2/boot.img
+
+# 3.1.2 替换为新 rootfs UUID (使用阶段 1 记录的 UUID)
+NEW_BOOT_UUID="<阶段1.5.3记录的boot子分区UUID>"
+NEW_ROOT_UUID="<阶段1.5.3记录的rootfs子分区UUID>"
+
+# 3.1.3 构建新 cmdline (含 net.ifnames=0 关键修复)
+NEW_CMDLINE="-quiet -splash loglevel=8 ignore_logval earlycon console=ttyMSM0,115200 \
+    net.ifnames=0 \
+    pmos_boot_uuid=$NEW_BOOT_UUID pmos_root_uuid=$NEW_ROOT_UUID"
+
+# 3.1.4 修改 boot.img cmdline
+python3 scripts/modify-bootimg-cmdline.py \
+    /tmp/jason-build-v2/boot.img \
+    /tmp/jason-build-v2/boot.img \
+    "$NEW_CMDLINE"
+
+# 3.1.5 验证
+ls -lh /tmp/jason-build-v2/boot.img
+sha256sum /tmp/jason-build-v2/boot.img
+```
+
+### 3.2 生成带 debug-shell 的 boot-debug.img (诊断用)
+
+```bash
+# 3.2.1 在 3.1.3 的 cmdline 基础上, 加入 debug-shell + systemd 调试参数
+DEBUG_CMDLINE="$NEW_CMDLINE pmos.debug-shell systemd.log_level=debug systemd.log_target=console systemd.show_status=true"
+
+python3 scripts/modify-bootimg-cmdline.py \
+    /tmp/jason-build-v2/boot.img \
+    /tmp/jason-build-v2/boot-debug.img \
+    "$DEBUG_CMDLINE"
+
+ls -lh /tmp/jason-build-v2/boot-debug.img
+sha256sum /tmp/jason-build-v2/boot-debug.img
+```
+
+### 3.3 验证 cmdline 正确性
+
+```bash
+# 3.3.1 解包 boot.img 查看 cmdline (用 magiskboot 或 abootimg)
+# 安装工具:
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S apt install -y abootimg 2>/dev/null || pip3 install --user magiskboot
+
+# 3.3.2 用 python 直接读 boot.img header 中的 cmdline
+python3 -c "
+import struct
+with open('/tmp/jason-build-v2/boot.img', 'rb') as f:
+    # Android boot header: cmdline 在偏移 64, 长度 512
+    f.seek(64)
+    cmdline = f.read(512).rstrip(b'\x00').decode()
+    print('boot.img cmdline:')
+    print(cmdline)
+    print()
+    print('包含 net.ifnames=0:', 'net.ifnames=0' in cmdline)
+    print('包含 pmos_boot_uuid:', 'pmos_boot_uuid=' in cmdline)
+    print('包含 pmos_root_uuid:', 'pmos_root_uuid=' in cmdline)
+    print('不含 pmos.debug-shell:', 'pmos.debug-shell' not in cmdline)
+"
+
+# 3.3.3 同样验证 boot-debug.img
+python3 -c "
+import struct
+with open('/tmp/jason-build-v2/boot-debug.img', 'rb') as f:
+    f.seek(64)
+    cmdline = f.read(512).rstrip(b'\x00').decode()
+    print('boot-debug.img cmdline:')
+    print(cmdline)
+    print()
+    print('包含 pmos.debug-shell:', 'pmos.debug-shell' in cmdline)
+"
+```
+
+### 3.4 阶段 2 验证标准
+
+- [ ] `boot.img` 生成成功 (~23MB)
+- [ ] `boot-debug.img` 生成成功 (~23MB)
+- [ ] cmdline 含 `net.ifnames=0`
+- [ ] cmdline 含 `pmos_boot_uuid=<新rootfs的boot子分区UUID>`
+- [ ] cmdline 含 `pmos_root_uuid=<新rootfs的rootfs子分区UUID>`
+- [ ] `boot.img` 不含 `pmos.debug-shell`
+- [ ] `boot-debug.img` 含 `pmos.debug-shell`
+
+---
+
+## 4. 阶段 3: 刷入并验证
+
+> 目标: 刷入新 rootfs + boot-debug.img, 在 debug shell 中验证 switch_root 成功, 再切到正常 boot.img。
+> 预计耗时: 30-60 分钟
+> 前置: 阶段 1 + 阶段 2 完成
+> 优先级: P1
+
+### 4.1 刷入 rootfs 到 userdata 分区
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 4.1.1 设备进入 fastboot
+adb reboot bootloader
+fastboot devices
+# 期望: d1236a7b fastboot
+
+# 4.1.2 刷入新 rootfs (会覆盖现有 userdata, 即现有 rootfs)
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot flash userdata \
+    ~/.local/var/pmbootstrap/chroot_native/home/pmos/rootfs/xiaomi-jason.img
+
+# 4.1.3 确认刷入成功
+fastboot getvar partition-type:userdata
+```
+
+### 4.2 刷入 boot-debug.img 到 boot 分区
+
+```bash
+# 4.2.1 刷入 boot-debug.img (先用 debug 版本验证 switch_root)
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot flash boot /tmp/jason-build-v2/boot-debug.img
+
+# 4.2.2 注意: modem 分区已刷入 whyred NON-HLOS.bin (WiFi firmware 1.0.0.591), 不需重刷
+# 仅在 modem 损坏时才重刷:
+# sudo fastboot flash modem /tmp/NON-HLOS-whyred.bin
+```
+
+### 4.3 重启进入 debug shell
+
+```bash
+# 4.3.1 重启 (注意: 用 reboot 而非 continue, 保证冷启动 modem 状态)
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot reboot
+
+# 4.3.2 等待 debug shell 出现 (USB serial gadget)
+sleep 30
+ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
+# 期望: 出现 /dev/ttyACM0 (USB NCM + ACM gadget)
+
+# 4.3.3 用 screen 连接 debug shell
+screen /dev/ttyACM0 115200
+# 按 Enter, 应看到:
+#   (pmOS debug shell) #
+```
+
+### 4.4 在 debug shell 中验证 rootfs 完整性
+
+```sh
+# === 在设备 debug shell 中 ===
+
+# 4.4.1 检查 rootfs 挂载
+mount | grep sysroot
+# 期望: /dev/loop0p2 on /sysroot type ext4 (rw,relatime)
+
+# 4.4.2 检查 init 二进制
+ls -la /sysroot/sbin/init
+file /sysroot/sbin/init
+# 期望: 软链到 /usr/lib/systemd/systemd
+
+# 4.4.3 验证新 rootfs 包含 usb-network-jason 配置
+ls /sysroot/etc/systemd/network/
+# 期望: 10-usb0.network 存在
+
+ls /sysroot/usr/local/bin/setup-usb-gadget.sh
+# 期望: 存在 (来自 usb-network-jason 包)
+
+# 4.4.4 验证 systemd-networkd 服务已启用
+ls /sysroot/etc/systemd/system/multi-user.target.wants/ | grep -E 'network|usb'
+# 期望: systemd-networkd.service, setup-usb-gadget.service, usb-ip-monitor.service
+
+# 4.4.5 chroot 测试 systemd 能否启动
+chroot /sysroot /usr/lib/systemd/systemd --version
+# 期望: systemd 256.x
+```
+
+### 4.5 pmos_continue_boot 验证 switch_root 成功
+
+```sh
+# === 在设备 debug shell 中 ===
+
+# 4.5.1 继续 boot (执行 switch_root)
+pmos_continue_boot
+
+# 4.5.2 观察: 是否成功 switch_root?
+# 成功标志:
+#   - 看到 systemd 启动日志 (A start job is running for...)
+#   - 看到 login 提示符 (或 USB 网络起来后 SSH 可连)
+# 失败标志:
+#   - 回到 "switch_root failed!" 错误信息
+#   - 设备无响应 (panic)
+#   - 看到 initramfs 的 init 仍在运行 (cat /proc/1/comm 显示 init 而非 systemd)
+```
+
+### 4.6 验证 USB SSH 可用
+
+```bash
+# === 回到主机 ===
+
+# 4.6.1 等待 60 秒让 systemd 启动 + USB gadget 配置
+sleep 60
+
+# 4.6.2 验证 USB 网络接口 (主机端)
+ip addr show | grep -A 5 'usb\|enx\|cdc'
+# 期望: 出现新 USB 网络接口, 通过 DHCP 获取 IP (172.16.42.x)
+
+# 4.6.3 ping 设备
+ping -c 5 172.16.42.1
+# 期望: 0% 丢包
+
+# 4.6.4 SSH 登录
+sshpass -p 1234 ssh -o StrictHostKeyChecking=no user@172.16.42.1 "uname -a"
+# 期望:
+#   Linux xiaomi-jason 6.19.10-sdm660 #2-postmarketos-qcom-sdm660 SMP PREEMPT ... aarch64 Linux
+
+# 4.6.5 验证关键诊断项
+sshpass -p 1234 ssh -o StrictHostKeyChecking=no user@172.16.42.1 <<'EOF'
+echo "=== PID 1 ==="
+cat /proc/1/comm
+echo "=== Boot ID (journal 更新证明 systemd 起来) ==="
+journalctl --list-boots | tail -3
+echo "=== USB 网络接口 ==="
+ip addr show usb0
+echo "=== systemd-networkd 状态 ==="
+systemctl status systemd-networkd --no-pager | head -10
+echo "=== NetworkManager 状态 ==="
+systemctl status NetworkManager --no-pager | head -5
+echo "=== usb-ip-monitor 状态 ==="
+systemctl status usb-ip-monitor --no-pager | head -5
+EOF
+```
+
+### 4.7 切换到正常 boot.img (无 debug)
+
+debug 版本验证成功后, 切到无 debug 版本实现开机即 Linux:
+
+```bash
+# 4.7.1 设备进入 fastboot
+adb -s 172.16.42.1:5555 reboot bootloader 2>/dev/null || \
+    sshpass -p 1234 ssh user@172.16.42.1 "sudo reboot bootloader" || \
+    (echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot reboot bootloader 2>/dev/null; sleep 5)
+
+# 备用: 手动按音量下+电源进 fastboot
+fastboot devices
+
+# 4.7.2 刷入正常 boot.img (无 debug-shell)
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot flash boot /tmp/jason-build-v2/boot.img
+
+# 4.7.3 重启
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot reboot
+```
+
+### 4.8 验证开机即 Linux + USB SSH 可用
+
+```bash
+# 4.8.1 等待 60 秒系统启动
+sleep 60
+
+# 4.8.2 验证 USB SSH
+ping -c 5 172.16.42.1
+sshpass -p 1234 ssh -o StrictHostKeyChecking=no user@172.16.42.1 "uname -a && uptime"
+
+# 4.8.3 重启 3 次, 验证持久性
+for i in 1 2 3; do
+    echo "=== 重启测试 $i/3 ==="
+    sshpass -p 1234 ssh user@172.16.42.1 "sudo reboot" 2>/dev/null || true
+    sleep 90
+    if ping -c 5 172.16.42.1 >/dev/null 2>&1; then
+        echo "[OK] 重启 $i 后 USB SSH 可达"
+    else
+        echo "[FAIL] 重启 $i 后 USB SSH 不可达"
+    fi
+done
+```
+
+### 4.9 阶段 3 验证标准
+
+- [ ] debug shell 可进入
+- [ ] debug shell 中 rootfs 完整性验证通过
+- [ ] `pmos_continue_boot` 后 systemd 起来 (`cat /proc/1/comm` = `systemd`)
+- [ ] journal 在更新 (`journalctl --list-boots` 有新条目)
+- [ ] USB SSH 可用 (`ssh user@172.16.42.1` 成功)
+- [ ] 切换到正常 boot.img 后, 开机即 Linux + USB SSH 可用
+- [ ] 重启 3 次持久性验证通过
+
+---
+
+## 5. 阶段 4: WiFi 和服务器配置
+
+> 目标: 验证 WiFi 仍可连接, 部署 H1/H2/H3 服务器脚本, 长稳测试。
+> 预计耗时: 60 分钟
+> 前置: 阶段 3 完成
+> 优先级: P2
+
+### 5.1 验证 WiFi 可连接
+
+```bash
+# 5.1.1 通过 USB SSH 进设备
+sshpass -p 1234 ssh user@172.16.42.1
+
+# === 在设备上 ===
+
+# 5.1.2 检查 wlan0 接口
+ip addr show wlan0
+# 期望: wlan0 存在 (因 net.ifnames=0, 接口名稳定)
+
+# 5.1.3 验证 WiFi firmware 版本
+dmesg | grep -E 'firmware ver|htt-ver' | head -3
+# 期望:
+#   firmware 1.0.0.591 booted
+#   htt target version 3.58
+
+# 5.1.4 扫描 WiFi 网络
+sudo nmcli device wifi list
+# 期望: 能扫描到 ChinaNet-810
+
+# 5.1.5 连接 WiFi
+sudo nmcli device wifi connect ChinaNet-810 password WIFI_CHINANET_PASS_PLACEHOLDER ifname wlan0
+# 期望: 成功连接, wlan0 获取 IP
+
+# 5.1.6 验证 IP 与外网连通
+ip addr show wlan0
+ping -c 3 8.8.8.8
+ping -c 3 192.168.1.1
+```
+
+### 5.2 验证 WiFi 局域网 SSH
+
+```bash
+# === 回到主机 ===
+
+# 5.2.1 等待 DHCP 分配 IP
+sleep 10
+
+# 5.2.2 通过 WiFi IP SSH
+sshpass -p 1234 ssh -o StrictHostKeyChecking=no user@192.168.1.12 "uname -a"
+# 期望: 成功登录
+
+# 5.2.3 双通道对比
+echo "USB 通道:"
+sshpass -p 1234 ssh user@172.16.42.1 "uptime"
+echo "WiFi 通道:"
+sshpass -p 1234 ssh user@192.168.1.12 "uptime"
+```
+
+### 5.3 部署 H1/H2/H3 服务器脚本
+
+```bash
+# === 主机端 ===
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 5.3.1 通过 USB SSH 推送 server-scripts 到设备
+sshpass -p 1234 scp -r refs/server-scripts/ user@172.16.42.1:/tmp/
+
+# 5.3.2 在设备上执行部署脚本
+sshpass -p 1234 ssh user@172.16.42.1 <<'EOF'
+sudo sh /tmp/server-scripts/deploy.sh
+# 或按 H1/H2/H3 顺序逐个部署:
+# sudo sh /tmp/server-scripts/H1-deploy.sh
+# sudo sh /tmp/server-scripts/H2-deploy.sh
+# sudo sh /tmp/server-scripts/H3-deploy.sh
+EOF
+
+# 5.3.3 验证所有 systemd timer 已启用
+sshpass -p 1234 ssh user@172.16.42.1 "systemctl list-timers --all"
+# 期望 8 个 timer:
+#   health-check (5min) + temp-monitor (5min) + net-monitor (5min) + fake-rtc-save (30min)
+#   + disk-io-monitor (10min) + apk-update-check (24h) + fsck-check (7d) + config-backup (7d)
+```
+
+### 5.4 长稳测试
+
+```bash
+# 5.4.1 30 分钟长稳测试 (复用现有脚本)
+cd /home/lyl/Documents/system/XiaoMiNote3
+./scripts/long-stability-test.sh
+# 期望: 0% 丢包, WiFi 持续 up, 无 ath10k crash
+
+# 5.4.2 高负载压力测试
+sshpass -p 1234 ssh user@172.16.42.1 "stress-ng --cpu 8 --timeout 300s"
+# 期望: 峰值温度 < 80°C, 无 panic
+```
+
+### 5.5 阶段 4 验证标准
+
+- [ ] WiFi firmware 版本 1.0.0.591 / htt-ver 3.58
+- [ ] WiFi 可扫描 + 连接 ChinaNet-810
+- [ ] WiFi 局域网 SSH 可用 (`ssh user@192.168.1.12`)
+- [ ] USB + WiFi 双通道 SSH 均可用
+- [ ] 8 个 systemd timer 全部 active
+- [ ] 30 分钟长稳测试 0% 丢包
+- [ ] 高负载压力测试无 panic
+
+---
+
+## 6. 阶段 5: 可复现性保证
+
+> 目标: 把所有改动固化到脚本和文档, 保证可从零复现。
+> 预计耗时: 30 分钟
+> 前置: 阶段 4 完成
+> 优先级: P2
+
+### 6.1 更新 `scripts/reproduce-from-scratch.sh`
+
+更新 v1 脚本, 加入新内容:
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 关键改动点:
+# 1. 在 Step 6 (生成 boot.img) 中, cmdline 加入 net.ifnames=0:
+#    NEW_CMDLINE="... net.ifnames=0 pmos_boot_uuid=$BOOT_UUID pmos_root_uuid=$ROOT_UUID"
+# 2. 在 Step 7 之后, 新增 Step 7.5: 生成 boot-debug.img
+# 3. 在 Step 8 (刷入) 中, 顺序改为: 先刷 boot-debug.img → 验证 → 刷 boot.img
+# 4. 在 Step 9 (验证) 中, 增加 systemd PID 1 验证 + journal 更新验证
+
+# 用 Edit 工具修改 scripts/reproduce-from-scratch.sh, 而非重写
+```
+
+### 6.2 更新 `docs/device-state-manifest.md`
+
+更新设备状态清单, 反映新 rootfs 状态:
+
+```markdown
+- rootfs UUID: 替换为新 UUID (阶段 1 记录)
+- cmdline 特征: 加入 net.ifnames=0
+- USB 网络配置: 改为 systemd-networkd (替代 NetworkManager 管 usb0)
+- 新增 usb-network-jason 包内容描述 (10-usb0.network 等)
+- 新增 §3.5: switch_root 验证方法
+```
+
+### 6.3 更新 `docs/progress.md`
+
+记录本次 "完全从0开始" 工作进展:
+
+```markdown
+- **2026-06-29: 完全从0开始 v2 执行**
+  - 阶段 0 诊断 switch_root 失败: <根因结论>
+  - 阶段 1 重新构建 rootfs: 4 包 build 成功
+  - 阶段 2 生成 boot.img + boot-debug.img: cmdline 含 net.ifnames=0
+  - 阶段 3 刷入并验证: switch_root 成功 + USB SSH 可用
+  - 阶段 4 WiFi + 服务器配置: 双通道 SSH + 8 timer + 长稳通过
+  - 阶段 5 可复现性: 脚本与文档已更新
+```
+
+### 6.4 git 提交所有改动
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 6.4.1 检查改动
+git status
+git diff --stat
+
+# 6.4.2 提交 (按文件类型分组)
+git add refs/jason-pmaports-patches/usb-network-jason/
+git add refs/jason-pmaports-patches/device-xiaomi-jason/
+git add scripts/reproduce-from-scratch.sh
+git add docs/restart-from-scratch-v2.md
+git add docs/device-state-manifest.md
+git add docs/progress.md
+git add docs/troubleshooting.md
+
+git commit -m "$(cat <<'EOF'
+jason: 完全从0开始 v2 执行 - 修复 switch_root + USB SSH
+
+- 阶段 0: 诊断 switch_root 失败根因 (见 troubleshooting.md §9)
+- 阶段 1: 重新构建 rootfs, usb-network-jason 改用 systemd-networkd
+- 阶段 2: boot.img cmdline 加入 net.ifnames=0 (彻底根除 enxXX 重命名)
+- 阶段 3: 验证 switch_root 成功 + USB SSH 可用 + 持久性
+- 阶段 4: WiFi + 8 个 systemd timer + 长稳通过
+- 阶段 5: 更新复现脚本与设备状态清单
+
+回退: cd jason_images_V8.5.9.0..._cn && ./flash_all.sh
+EOF
+)"
+```
+
+### 6.5 验证从零复现
+
+```bash
+# 6.5.1 在干净环境模拟 (用 --no-flash 验证构建产物)
+cd /home/lyl/Documents/system/XiaoMiNote3
+
+# 备份 pmaports 改动
+mv ~/.local/var/pmbootstrap/cache_git/pmaports/device/testing \
+    /tmp/jason-pmaports-backup-$(date +%Y%m%d)/
+
+# zap pmbootstrap
+pmbootstrap zap
+
+# 运行复现脚本 (不刷入, 只验证构建)
+./scripts/reproduce-from-scratch.sh --no-flash
+
+# 6.5.2 验证产物
+ls -lh /tmp/jason-build/boot-nodebug.img /tmp/jason-build/xiaomi-jason.img
+sha256sum /tmp/jason-build/boot-nodebug.img /tmp/jason-build/xiaomi-jason.img
+# 期望: 与阶段 1/2 的产物 sha256 一致 (可复现)
+```
+
+### 6.6 阶段 5 验证标准
+
+- [ ] `reproduce-from-scratch.sh` 更新 (含 net.ifnames=0 + boot-debug 生成)
+- [ ] `device-state-manifest.md` 更新 (新 UUID + systemd-networkd 配置)
+- [ ] `progress.md` 记录本次执行
+- [ ] `troubleshooting.md` 新增 §9 switch_root 诊断
+- [ ] git 提交完成, 包含所有改动文件
+- [ ] `--no-flash` 模式从零复现成功, 产物 sha256 一致
+
+---
+
+## 7. 风险与回退
+
+### 7.1 每阶段回退方案
+
+| 阶段 | 风险 | 回退方案 |
+|---|---|---|
+| 阶段 0 | 设备无法进入 debug shell (kernel panic 早期) | `fastboot flash boot backups/original-jason-20260627-114354/boot.img` 回原厂 boot, 然后进 TWRP 抓 ramoops |
+| 阶段 1 | pmbootstrap build 失败 (502/patch 错误) | 见 troubleshooting.md §8; kernel 编译失败可手动下载 tarball 到 distfiles cache |
+| 阶段 1 | pmbootstrap install 失败 (mkinitfs 找不到 dtb) | 先 `pmbootstrap build linux-postmarketos-qcom-sdm660 --force --lax` 再 install (见 troubleshooting.md §8.2) |
+| 阶段 2 | boot.img cmdline 修改失败 (Python 脚本报错) | 检查 boot.img header 格式; 备选: 用 `mkbootimg` 重新打包 |
+| 阶段 3 | 刷入后无法启动 (黑屏) | `fastboot boot twrp-3.7.0_9-0-jason.img` 进 TWRP 救砖; ramoops 抓 panic 日志 |
+| 阶段 3 | switch_root 仍失败 | 启用阶段 0 方案 A/B/C (chroot / busybox switch_root / kexec) |
+| 阶段 3 | USB SSH 仍不通 | 临时用 WiFi SSH (192.168.1.12) 诊断; 检查 systemd-networkd + usb0.network 配置 |
+| 阶段 4 | WiFi 不工作 (firmware crash) | modem 分区重新刷 whyred NON-HLOS.bin (见 troubleshooting.md §7.4) |
+| 阶段 5 | git 提交冲突 | `git pull --rebase` 后重提交; 备份目录不动 |
+
+### 7.2 如果 switch_root 仍失败 (终极方案)
+
+按优先级尝试:
+
+1. **方案 A (chroot + exec)**: 修改 init_2nd.sh 用 `chroot /sysroot /sbin/init` 替代 switch_root (见 §1.6)
+2. **方案 B (busybox switch_root)**: 改用 `/bin/busybox switch_root` (见 §1.6)
+3. **方案 C (kexec)**: 用 kexec 直接 boot 到 rootfs 内核 (见 §1.6, 需 kernel 启用 CONFIG_KEXEC)
+4. **方案 D (重启策略)**: 暂时退回到 v1 配置 (boot.img 用 debug-shell, 但加 `pmos_continue_boot` 自动化), 在 debug shell 中手动 `exec switch_root /sysroot /sbin/init`
+5. **方案 E (彻底重构 initramfs)**: 自己写一个最小 initramfs, 不用 postmarketos-initramfs, 直接 `mount + switch_root`
+
+### 7.3 如果 USB SSH 仍不通 (终极方案)
+
+按优先级尝试:
+
+1. **方案 1 (cmdline)**: 确认 `net.ifnames=0` 已生效 (`cat /proc/cmdline`)
+2. **方案 2 (networkd)**: `systemctl status systemd-networkd`, 检查 `10-usb0.network` 是否被加载 (`networkctl list`)
+3. **方案 3 (NM mask)**: 临时 `systemctl mask NetworkManager` 全局禁用 NM, 排除 NM 干扰
+4. **方案 4 (gadget 重配)**: 手动 `setup-usb-gadget.sh` 重配, 看 `dmesg | grep -i usb` 是否有 cdc_ncm 错误
+5. **方案 5 (WiFi 优先)**: 接受 USB SSH 不通的现状, 仅用 WiFi SSH (192.168.1.12), 但需保证 WiFi 自动连接 (NetworkManager connection autoconnect)
+
+### 7.4 任何时候回退到原厂 Android
+
+```bash
+cd /home/lyl/Documents/system/XiaoMiNote3/jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
+./flash_all.sh
+# 然后进 TWRP 恢复 modemst1/modemst2/fsg/persist (见 reflash-guide.md §1.3)
+```
+
+### 7.5 仅回退 boot 分区 (保留新 rootfs)
+
+```bash
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot flash boot \
+    backups/original-jason-20260627-114354/boot.img
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot reboot
+# 设备回到原厂 Android boot + pmOS userdata (userdata 是 ext4 镜像, Android 不识别, 但不影响 boot)
+```
+
+### 7.6 进 TWRP 救砖
+
+```bash
+# 设备关机, 按住音量下 + 电源进 fastboot
+echo "HOST_SUDO_PASS_PLACEHOLDER" | sudo -S fastboot boot twrp-3.7.0_9-0-jason.img
+adb shell
+# 在 TWRP 下检查 ramoops:
+cat /proc/ramoops_console
+ls /sys/fs/pstore/
+```
+
+---
+
+## 8. 关键决策点 (需要询问用户)
+
+> 以下决策点在新计划执行过程中需要询问用户, 不自主决定:
+
+### 8.1 阶段 0 完成后
+
+- **决策点 1**: switch_root 失败的精确根因是什么? 是否选择方案 A/B/C/D/E?
+  - 影响: 决定是否需要修改 postmarketos-initramfs 包源
+  - 选项:
+    - (a) 重建 rootfs 即可解决 (rootfs 损坏)
+    - (b) 改 init_2nd.sh 用 chroot (方案 A)
+    - (c) 改用 busybox switch_root (方案 B)
+    - (d) 用 kexec (方案 C, 需 kernel 启用 CONFIG_KEXEC)
+    - (e) 其他方案
+
+### 8.2 阶段 1 完成前
+
+- **决策点 2**: 新 rootfs 的 UUID 是否保持与旧 rootfs 一致 (`c5f7e8ec...` / `c79928f5...`)?
+  - 影响: 是否需要同步更新 device-state-manifest.md 的 UUID 基准
+  - 选项:
+    - (a) 保持一致 (用 `tune2fs -U <旧UUID>` 强制改 UUID)
+    - (b) 接受新 UUID, 更新文档
+
+- **决策点 3**: 是否在 device-xiaomi-jason 中全局禁用 NetworkManager (改用 systemd-networkd 管所有网络)?
+  - 影响: WiFi 自动连接配置方式不同
+  - 选项:
+    - (a) 保留 NetworkManager (仅管 wlan0, usb0 由 systemd-networkd 管) — **推荐**
+    - (b) 全局禁用 NetworkManager, WiFi 用 iwd + systemd-networkd
+
+### 8.3 阶段 3 完成后
+
+- **决策点 4**: 如果 switch_root 修复成功但 USB SSH 仍不通, 是否接受仅 WiFi SSH?
+  - 影响: 决定是否继续投入 USB SSH 调试
+  - 选项:
+    - (a) 必须修复 USB SSH (开机即 Linux + USB SSH 是完成定义的一部分)
+    - (b) 接受仅 WiFi SSH (WiFi 自动连接已配置, 可远程访问)
+
+### 8.4 阶段 4 完成后
+
+- **决策点 5**: 是否在 rootfs 中预装 WiFi 连接配置 (ChinaNet-810/WIFI_CHINANET_PASS_PLACEHOLDER), 让开机自动连 WiFi?
+  - 影响: 设备开机即有 WiFi SSH 通道, 无需 USB
+  - 选项:
+    - (a) 预装 (在 rootfs 构建时写入 NetworkManager connection)
+    - (b) 不预装, 首次启动后通过 USB SSH 手动配
+  - 推荐: (a) 预装, 保证开机即有双通道
+
+- **决策点 6**: SSH 公钥认证是否启用?
+  - 影响: 安全性 vs 便利性
+  - 选项:
+    - (a) 保留密码登录 (user/1234)
+    - (b) 启用公钥 + 禁用密码 (需先生成密钥对)
+
+### 8.5 阶段 5 完成后
+
+- **决策点 7**: 是否在阶段 5 完成后, 长期保留 boot-debug.img 在 boot 分区 (而非 boot.img)?
+  - 影响: debug 版本会卡在 debug shell, 不适合生产
+  - 选项:
+    - (a) 切到 boot.img (无 debug) — **推荐**
+    - (b) 保留 boot-debug.img (方便后续诊断)
+
+---
+
+## 9. 附录: 关键文件路径速查
+
+### 9.1 项目根目录
+
+```
+/home/lyl/Documents/system/XiaoMiNote3/
+├── AGENTS.md                                    # 项目规则
+├── docs/
+│   ├── restart-from-scratch-v2.md                # 本文档
+│   ├── restart-plan.md                           # v1 重做计划 (历史)
+│   ├── progress.md                               # 工作进展
+│   ├── device-state-manifest.md                  # 设备状态清单
+│   ├── troubleshooting.md                       # 故障排查
+│   ├── reflash-guide.md                          # 刷机流程
+│   └── ...
+├── refs/
+│   ├── pmaports/main/postmarketos-initramfs/init_2nd.sh  # switch_root 失败位置 (line 106)
+│   ├── jason-dts/jason.dts                       # jason DTS 源
+│   ├── jason-pmaports-patches/
+│   │   ├── usb-network-jason/                    # 待重建 (核心修复)
+│   │   ├── device-xiaomi-jason/                  # 待更新 depends
+│   │   ├── firmware-xiaomi-jason/
+│   │   └── linux-postmarketos-qcom-sdm660/
+│   └── server-scripts/                           # H1/H2/H3 服务器脚本
+├── backups/original-jason-20260627-114354/        # 原厂 28 分区备份 (不动)
+├── jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn/  # 原厂 fastboot 包 (不动)
+└── scripts/
+    ├── reproduce-from-scratch.sh                  # v1 复现脚本 (待更新)
+    ├── apply-jason-patches.sh
+    ├── modify-bootimg-cmdline.py
+    ├── backup-partitions.sh
+    └── long-stability-test.sh
+```
+
+### 9.2 pmbootstrap 工作区
+
+```
+~/.local/var/pmbootstrap/
+├── cache_git/pmaports/device/testing/
+│   ├── usb-network-jason/                         # 待更新
+│   ├── device-xiaomi-jason/                       # 待更新
+│   ├── firmware-xiaomi-jason/
+│   └── linux-postmarketos-qcom-sdm660/
+└── chroot_native/home/pmos/
+    ├── rootfs/xiaomi-jason.img                    # 阶段 1 输出
+    └── rootfs/boot.img                            # 阶段 2 输入
+```
+
+### 9.3 构建产物 (本机 /tmp)
+
+```
+/tmp/jason-build-v2/
+├── boot.img                                       # 正常启动 (~23MB)
+├── boot-debug.img                                 # 诊断用 (~23MB)
+└── xiaomi-jason.img                               # rootfs (~1.4GB)
+```
+
+### 9.4 关键 UUID (v2 新基准, 阶段 1 记录后填入)
+
+| 用途 | UUID |
+|---|---|
+| boot 子分区 (ext2) | `<待阶段 1 记录>` |
+| rootfs 子分区 (ext4) | `<待阶段 1 记录>` |
+
+### 9.5 关键命令速查
+
+```bash
+# 进 fastboot
+adb reboot bootloader
+
+# 临时 boot (不 flash)
+sudo fastboot boot <boot.img>
+
+# 永久 flash
+sudo fastboot flash boot <boot.img>
+sudo fastboot flash userdata <xiaomi-jason.img>
+sudo fastboot flash modem <NON-HLOS-whyred.bin>
+
+# 重启
+sudo fastboot reboot              # cold reboot (modem 干净)
+sudo fastboot oem reboot-recovery  # fastboot → recovery
+
+# 连 debug shell (USB serial)
+screen /dev/ttyACM0 115200
+
+# SSH (USB)
+sshpass -p 1234 ssh user@172.16.42.1
+
+# SSH (WiFi)
+sshpass -p 1234 ssh user@192.168.1.12
+
+# pmbootstrap 操作
+pmbootstrap zap                              # 清 chroot (保留 pmaports)
+pmbootstrap checksum <pkg>                   # 更新校验值
+pmbootstrap build <pkg> --force              # 强制重建
+pmbootstrap build <pkg> --force --lax        # 宽松模式 (绕过 lint)
+pmbootstrap install --password 1234          # 生成 rootfs
+pmbootstrap export --output /tmp/xxx/        # 导出 boot.img
+
+# 回退原厂
+cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn && ./flash_all.sh
+```
+
+---
+
+## 10. 执行顺序总结
+
+```
+阶段 0 (诊断)        30-90min   [阻塞] switch_root 根因 + 方案选择
+   ↓
+阶段 1 (重建 rootfs) 60-120min  [阻塞] 4 包 build + install
+   ↓
+阶段 2 (生成 boot)   10min      boot.img + boot-debug.img
+   ↓
+阶段 3 (刷入验证)    30-60min   debug 验证 switch_root → 切正常 boot
+   ↓
+阶段 4 (WiFi+服务器) 60min       WiFi + H1/H2/H3 + 长稳
+   ↓
+阶段 5 (复现性)      30min       脚本+文档+git commit
+```
+
+**总预计耗时**: 3.5 - 6 小时 (含编译时间)
+
+**关键路径**: 阶段 0 → 阶段 1 → 阶段 3 (三大阻塞点必须依次通过)
+
+---
+
+## 11. 文档变更记录
+
+| 日期 | 版本 | 作者 | 改动 |
+|---|---|---|---|
+| 2026-06-29 | v2.0 | sub-agent | 初版: 基于 v1 + switch_root 失败诊断, 完全从0开始重建 |

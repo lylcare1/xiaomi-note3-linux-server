@@ -237,14 +237,83 @@ USB SSH 不通的根因(综合社区调研 + agent 核查):
 - `/home/lyl/Documents/system/XiaoMiNote3/scripts/deploy.sh` (构建+刷入+验证)
 - `/tmp/jason-boot-initramfs.img` (23MB,已刷入)
 
-**当前设备状态**:
-- PID 1: `/bin/busybox ash /init_2nd.sh` (initramfs 模式)
-- USB NCM: 172.16.42.1/16,SSH on port 22
-- ADSP: running,Modem: running,CDSP: offline (无固件)
-- wlan0: 存在,QMI 握手成功,可扫描
-- 3 个用户态服务运行: rmtfs + tqftpserv + diag-router
-- 无 modem crash
+**当前设备状态** (updated 2026-06-29 23:35):
+- PID 1: `/bin/busybox ash /init_2nd.sh` (initramfs 模式, 不启动 systemd)
+- USB NCM: 172.16.42.1/16, SSH on port 22 (root, key-based)
+- ADSP: running, Modem: running (30min 0 crash), CDSP: offline (无固件)
+- WiFi: wlan0 自动连接 ChinaNet-810, IP 192.168.1.17/24, MAC 固定 02:1a:73:6b:03:01
+- 5 个用户态服务运行: rmtfs + tqftpserv + diag-router + wpa_supplicant + udhcpc
+- 服务器监控: server-daemon.sh (8 个监控任务, 替代 systemd timers)
+- 屏幕显示: console=tty0 fbcon=nodefer, tty1 交互式 shell
 
-**待办**:
-- 阶段 5: 服务器脚本部署 (需适配 initramfs 模式,无 systemd timers)
-- 阶段 6: 归档过期文档,更新 device-state-manifest.md,git commit
+#### 2026-06-29 阶段 5 完成: 服务器脚本 (initramfs 适配)
+
+**阶段 5 (服务器脚本部署)**:
+- 适配 initramfs 模式 (无 systemd, PID 1 = busybox ash):
+  - `server-daemon.sh`: 单进程循环调度器, 替代 8 个 systemd timers
+  - 8 个监控任务: health-check(5min) + temp-monitor(5min) + net-monitor(5min) + disk-io-monitor(10min) + fake-rtc-save(30min) + apk-update-check(24h) + config-backup(7d) + fsck-check(7d)
+  - syslogd 在 rootfs 上下文运行 (chroot /sysroot, 为 logger 命令提供 /dev/log)
+  - motd-status.sh: SSH 登录时显示系统状态 (uptime/mem/disk/temp/WiFi/USB/SSH/daemon)
+- 关键适配:
+  - `pgrep -x sshd` → `pgrep -f sshd` (进程名是 sshd.pam 不是 sshd)
+  - wlan0 DOWN 不算失败 (initramfs 模式下 WiFi 可能未连接, 接口存在即可)
+  - `nohup` + `</dev/null` 防 SIGHUP (SSH 断开时守护进程不死)
+- 自动启动: init_2nd.sh 在 boot 后 15s 启动 syslogd + fake-rtc-restore + server-daemon
+
+**屏幕 console 修复**:
+- cmdline 添加 `console=tty0 fbcon=nodefer` (之前只有 ttyMSM0 串口, 屏幕黑色)
+- init_2nd.sh 添加 tty1 交互式 shell (chroot /sysroot /bin/sh, 循环 respawn)
+
+**WiFi 自动启动 (关键功能)**:
+- `wifi-start.sh`: 幂等 WiFi 启动脚本 (wpa_supplicant + udhcpc)
+  - 固定 MAC 地址 02:1a:73:6b:03:01 (ath10k 每次启动分配随机 MAC, 导致 DHCP IP 不稳定)
+  - 检测已有连接, 不杀工作进程 (idempotent)
+  - 等待 wpa_state=COMPLETED (最多 25s), 然后启动 udhcpc
+- init_2nd.sh 添加 WiFi starter 子 shell: 等 wlan0 出现 (~40s) → 调用 wifi-start.sh
+- wpa_supplicant.conf 持久化在 /etc/wpa_supplicant/ (rootfs)
+- 启动后 ~47s WiFi 连接完成: wpa握手 3s + DHCP 1s
+
+**30 分钟稳定性测试 (PASSED)**:
+- 脚本: `scripts/stability-test.sh` (30 samples x 60s)
+- 日志: `logs/stability-test.log`
+- 结果:
+  | 指标 | 范围 | 状态 |
+  |------|------|------|
+  | 温度 | 53.8 - 55.8°C | 稳定, 无过热 |
+  | 负载 | 0.12 - 0.46 | 空闲 |
+  | 内存 | 387-433 MB / 3624 MB | ~11% 使用 |
+  | WiFi IP | 192.168.1.17 (1 个 IP) | 0 断线 |
+  | Modem | running 30/30 | 0 崩溃 (diag-router 修复生效) |
+  | ADSP | running 30/30 | 0 崩溃 |
+  | 服务 | sshd/wpa/dhcp/daemon 全 UP 30/30 | 0 失败 |
+  | 重启 | 0 | uptime 1958s (~33min) |
+
+**关键文件** (阶段 5):
+- `refs/server-scripts-initramfs/server-daemon.sh` (93 行)
+- `refs/server-scripts-initramfs/health-check.sh` (71 行)
+- `refs/server-scripts-initramfs/net-monitor.sh` (60 行)
+- `refs/server-scripts-initramfs/fake-rtc-restore.sh` (26 行)
+- `refs/server-scripts-initramfs/motd-status.sh` (58 行)
+- `refs/server-scripts-initramfs/wifi-start.sh` (84 行)
+- `refs/initramfs/init_2nd.sh` (312 行, 含 WiFi starter + tty1 shell + server-daemon)
+- `scripts/stability-test.sh` (30-min 监控脚本)
+
+#### 2026-06-29 阶段 6 进行中: 文档整理
+
+- 归档 5 个过期文档到 `docs/archive/`
+- 更新 `device-state-manifest.md` (initramfs 模式, WiFi 自动启动, SSH 密钥)
+- 更新 `progress.md` (本文)
+- git commit
+
+### 5. 首阶段成功定义 (达成情况)
+
+| 条件 | 状态 | 证据 |
+|------|------|------|
+| 设备可重复启动进入 Linux | ✅ | 多次 reboot 后均自动进入 Linux (PID 1 = busybox ash) |
+| rootfs 可读写 | ✅ | `/dev/loop0p2 on / type ext4 (rw,relatime)` |
+| WiFi 可连接指定网络 | ✅ | ChinaNet-810 自动连接, IP 192.168.1.17, 30min 0 断线 |
+| SSH 可从局域网登录 | ✅ | `ssh root@192.168.1.17` (密钥认证), USB `ssh root@172.16.42.1` |
+| 基本系统信息采集 | ✅ | dmesg / ip a / syslog (logger + /var/log/messages) |
+| 刷回/重刷/更新标准流程文档 | ✅ | docs/reflash-guide.md + scripts/deploy.sh (--build/--flash/--verify) |
+
+**首阶段成功!** (2026-06-29)

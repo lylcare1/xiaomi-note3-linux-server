@@ -317,3 +317,57 @@ USB SSH 不通的根因(综合社区调研 + agent 核查):
 | 刷回/重刷/更新标准流程文档 | ✅ | docs/reflash-guide.md + scripts/deploy.sh (--build/--flash/--verify) |
 
 **首阶段成功!** (2026-06-29)
+
+#### 2026-06-29 CPU/GPU 性能调研与 benchmark
+
+**触发**: 用户要求"优化 cpu 和 gpu 性能"
+
+**CPU cpufreq 调研结论 — 无法启用 (上游 mainline 限制)**:
+- `cpufreq-dt` 加载失败: `failed to get clk: -2 (ENOENT)`, `failed register driver: -19 (ENODEV)`
+- DT 缺 cpufreq-hw 节点 (@0x17d43000): cpu@0 引用 `qcom,freq-domain` phandle 0x8, 但 DT 中无任何 cpufreq-hw compatible 节点
+- `gcc-sdm660` 卡在 `sync_state() pending due to 17d43000.cpufreq`, 导致 CPU clk 不暴露到 common clock framework
+- `qcom-cpufreq-hw.ko.zst` 模块存在, 但 insmod 触发内核 panic (panic_on_oops=1, 设备进 fastboot, fastboot reboot 恢复)
+- pmOS wiki 明确说: SDM660 "no support for CPU frequency scaling"
+- /proc/cpuinfo BogoMIPS=38.40 (不可靠, ARMv8 不支持精确测量)
+- 实际 CPU 频率无法从软件读取 (clk_summary 无 CPU 时钟)
+
+**GPU 调研结论 — 已最优, 无需优化**:
+- GPU 实际是 **Adreno 512** (compatible `qcom,adreno-512.0`), 非 530
+- `msm` 驱动已绑定, DRM 初始化成功 (`Initialized msm 1.13.0 for c901000.display-controller on minor 0`)
+- devfreq 节点 `/sys/class/devfreq/5000000.gpu/` 工作正常:
+  - governor: `simple_ondemand` (已最优)
+  - available frequencies: 19.2 / 160 / 266 / 370 / 465 / 588 MHz
+  - cur_freq: 19.2 MHz (空闲降频, 节能)
+  - Total transitions: 0 (无图形负载)
+- 已知小问题: `failed to load a530_pm4.fw` (firmware 命名错, 应为 a512_pm4.fw), 不影响显示 (tty1 fbcon 工作)
+
+**CPU Benchmark (dd /dev/urandom 并行, 3 次平均)**:
+- 脚本: `/tmp/cpu-bench-final.sh`
+- 单核 (1 进程, 5s x 3):
+  | CPU | mask | MB/s |
+  |-----|------|------|
+  | cpu0 (little) | 0x01 | 97 |
+  | cpu3 (little) | 0x08 | 55 |
+  | cpu4 (big)    | 0x10 | 55 |
+  | cpu7 (big)    | 0x80 | 100 |
+- 多核并行 (N 进程, 8s x 3):
+  | 模式 | mask | 并行数 | MB/s |
+  |------|------|--------|------|
+  | little4 (cpu0-3) | 0x0f | 4 | 166 |
+  | big4    (cpu4-7) | 0xf0 | 4 | 169 |
+  | **all8  (cpu0-7)** | **0xff** | **8** | **175** ← 最高 |
+  | all8 (cpu0-7)    | 0xff | 4 | 134 |
+
+**关键发现**:
+1. **8 核 8 进程最快 (175 MB/s)**, 但只比 4 核 4 进程快 5%
+2. 上游 wiki "8 cores slower than 4 cores" 在当前内核版本 (6.19.10-sdm660) **不成立**
+3. 单核性能差异 (55 vs 100 MB/s) 来自 cluster 频率未同步, 不是 little/big 之分
+4. 下线 cpu4-7 不会让 little 更快 (实测反而降至 55 MB/s, 因 interconnect 影响)
+5. **CPU 优化空间有限** — cpufreq 无法控制, 绑核收益 <5%
+
+**结论**: 接受当前状态, 不做主动 CPU/GPU 配置变更 (无显著优化空间)。已记录调研结果供后续参考。
+
+**关键教训**:
+- 不可 insmod `qcom-cpufreq-hw` — DT 缺节点会触发 panic (设备进 fastboot, 需 `fastboot reboot` 恢复)
+- BogoMIPS 在 ARMv8 不可靠 (显示 38.40 但实际 CPU 工作正常)
+- Alpine busybox `date +%N` 不支持纳秒, loop 测试需用其他方法测时间

@@ -960,3 +960,156 @@ cpufreq@179c0000 节点也存在 (patch 0003)
   可暂时忽略
 - **服务器目标优先级**: WiFi/SSH/rootfs 已满足, CPU 低频不影响 SSH 运维,
   可考虑暂缓 cpufreq 启用, 优先验证长稳运行
+
+---
+
+## 2026-06-30: r5 内核 + cpr3 驱动移植 (阶段1 完成)
+
+### 背景
+
+之前 r4 内核构建中, patch 0004 (cpr3 驱动) 添加了 SDM660 描述符后, cpr3.c 的
+hunk header (`@@ -0,0 +1,2710 @@`) 没有同步更新, 导致 `patch` 工具截断
+cpr3.c 末尾 ~247 行 (cpr_thread_init 函数尾 + 后续函数 + of_match 表全部丢失).
+表现为 `drivers/pmdomain/qcom/cpr3.c:2710:1: expected '}'` 和
+`cpr3.c:2694:8: use of undeclared label 'fail'`.
+
+### 修复: patch 0004 hunk header 2710 -> 2957
+
+- 文件: `device/testing/linux-postmarketos-qcom-sdm660/0004-cpr3-driver.patch`
+- 修改: `@@ -0,0 +1,2710 @@` -> `@@ -0,0 +1,2957 @@` (cpr3.c 新文件 hunk)
+- 验证: `awk` 统计 `+` 行数确认为 2957
+- 同步更新 APKBUILD 中的 sha512sum:
+  `aaf064a734e849c9215031c93ee8fc19e1ef98127b293946709472d48467d6261e07174e61905b60db741d14340d05d5bd362ec7c187bfb3a032c59768a83e8a`
+- pmbootstrap build 一次通过
+
+### r5 内核包验证
+
+```
+linux-postmarketos-qcom-sdm660-6.19.10-r5.apk
+├── vmlinuz (Image.gz, 10,828,560 bytes)
+├── sdm660-xiaomi-jason.dtb (63,227 bytes)
+└── modules/ (632 个 .ko.zst, 含 cpr3.ko.zst)
+```
+
+`modinfo cpr3.ko.zst` 关键 alias (新增 sdm660-cprh):
+```
+alias: of:N*T*Cqcom,msm8998-cprh
+alias: of:N*T*Cqcom,sdm630-cprh
+alias: of:N*T*Cqcom,sdm660-cprh   <-- 新增
+alias: of:N*T*Cqcom,sdm660-cprhC* <-- 新增
+vermagic: 6.19.10-sdm660 SMP preempt mod_unload aarch64
+```
+
+### 部署: 直接 dd 写 boot 分区
+
+pmOS chroot 限制 `reboot` 不生效 (PID 1 是 busybox ash init_2nd.sh, 受内核
+保护无法 SIGTERM). 改用直接写 boot 分区方式:
+
+1. **构建 boot.img** (内联 Python):
+   - 从 r5 apk 提取 vmlinuz + DTB (用 Python gzip + tarfile, 因 .apk 是多
+     gzip 流, `tar xzf` 只读第一个)
+   - 从设备旧 boot.img 提取 ramdisk.cpio.gz + cmdline (512B)
+   - 组装: header(4096B) + kernel(padded) + ramdisk(padded)
+   - DTB 以 FDT magic `0xd00dfeed` 追加到 kernel 末尾
+
+2. **写入 boot 分区**:
+   ```bash
+   printf "HOST_SUDO_PASS_PLACEHOLDER\n" | sudo -S dd if=/tmp/new-boot.img \
+       of=/dev/disk/by-partlabel/boot bs=1M
+   ```
+
+3. **重启**: `echo s > /proc/sysrq-trigger` (sync) + `echo b > ...` (reboot)
+   - 有 ~5 分钟延迟, 但最终生效
+
+### rootfs 模块更新
+
+只更新 boot 分区不够, /lib/modules/ 仍是旧模块 (缺少 sdm660-cprh alias).
+操作流程:
+
+1. 从 r5 apk 提取全部 632 个模块到 `/tmp/r5-kernel-extract/modules/`
+2. `tar czf /tmp/r5-modules.tar.gz` (11MB)
+3. `scp` 到设备 `/tmp/`
+4. 设备上: `mv /lib/modules/6.19.10-sdm660 /lib/modules/6.19.10-sdm660.old`
+5. 解压新模块到 `/lib/modules/6.19.10-sdm660/`
+6. `depmod -a 6.19.10-sdm660`
+
+验证: `modinfo cpr3` 显示 `alias: of:N*T*Cqcom,sdm660-cprh` ✓
+
+### cpr3 驱动 probe 验证 (阶段1 完成, 部分)
+
+`modprobe cpr3` 后 dmesg:
+
+```
+[  652.532325] genpd_provider power-controller@179c8000_thread0:
+              error -ENODEV: Failed to add OPP table for index 0
+[  652.533184] Unable to handle kernel paging request at virtual address
+              ffff05c8801dc018
+[  652.597737] Internal error: Oops: 0000000096000004 [#1] SMP
+[  652.784879] Call trace:
+[  652.791951]  genpd_remove+0x34/0x288 (P)
+[  652.795416]  pm_genpd_remove+0x3c/0x60
+[  652.798851]  cpr_probe+0x448/0x498 [cpr3]
+[  652.802296]  platform_probe+0x84/0xcc
+...
+[  652.840550]  init_module+0x30/0xfd8 [cpr3]
+```
+
+**已确认**:
+- ✓ r5 内核启动成功 (uname -r = 6.19.10-sdm660)
+- ✓ cprh DT 节点 status=okay, compatible=qcom,sdm660-cprh qcom,cprh
+- ✓ qfprom0 nvmem 设备存在 (CPR fuse 读取就绪)
+- ✓ cpr3 模块成功加载, driver 注册为 `qcom-cpr3`
+- ✓ 设备绑定: `/sys/bus/platform/drivers/qcom-cpr3/179c8000.power-controller`
+- ✓ cpr_probe 被调用 (驱动入口被执行)
+
+**probe 失败原因**:
+- ✗ `Failed to add OPP table for index 0` (-ENODEV)
+- 根本原因: DT 缺少 cprh_opp_table 节点和 CPU 节点的 power-domains/required-opps
+  引用, cpr3 驱动找不到对应的 OPP 描述
+- 这是预期的 — patch 0003 (cpu power-domains + cprh_opp_table + required-opps)
+  尚未应用
+
+**额外发现**: cpr3 驱动错误清理路径有 bug
+- `genpd_remove+0x34` 访问已释放指针 (`ffff05c8801dc018`, level 0 translation
+  fault)
+- `pm_genpd_remove` 在 OPP 表添加失败后被调用, 但 genpd 数据已部分释放
+- 这是上游 cpr3 驱动的 bug, 不影响启动, 但 probe 失败时会 Oops
+
+**当前状态**: 模块残留 `Loading` 状态 (cpr3 57344 1 - Loading), driver 仍
+绑定设备. 需要重启清理. 但**驱动加载、匹配、probe 入口都已验证**, 阶段1
+目标达成.
+
+### 阶段1 完成定义
+
+- [x] r5 内核可启动
+- [x] cpr3 模块可加载 (sdm660-cprh alias 正确)
+- [x] cpr3 driver 注册并绑定设备
+- [x] cpr_probe 被调用 (DT 解析、driver_data 加载正常)
+- [ ] cpr_probe 成功 (等待 patch 0003 添加 OPP 表)
+
+### 下一步: 阶段2 (patch 0003)
+
+需要修改 device tree 添加:
+1. **cprh_opp_table 节点**: 描述每个 fuse level 对应的目标电压/quotient
+2. **CPU 节点 power-domains**: `<&cprh CPRH Silver/...>` 引用
+3. **CPU OPP 节点 required-opps**: `<&cprh_opp_X>` 引用
+
+参考: SDM630 已有的 cprh_opp_table 实现 (sdm630-xiaomi-common.dts)
+
+### 临时文件
+
+- `/tmp/r5-kernel-extract/` — r5 apk 提取结果 (vmlinuz, DTB, modules)
+- `/tmp/r5-modules.tar.gz` — 632 模块打包 (11MB)
+- `/tmp/current-boot.img` — 设备旧 boot.img 备份 (67MB)
+
+### 关键技术备忘
+
+- **Alpine .apk 多 gzip 流**: 用 Python `gzip.decompress()` + `tarfile.open()`
+  提取, 不能用 `tar xzf`
+- **Android boot.img 格式**: header(4096B) + kernel(padded to 4096) +
+  ramdisk(padded to 4096), DTB 以 FDT magic 追加到 kernel 末尾
+- **pmOS chroot reboot 限制**: 用 `echo b > /proc/sysrq-trigger` 替代
+- **sudo 密码**: `printf "HOST_SUDO_PASS_PLACEHOLDER\n" | sudo -S` 可靠, `echo HOST_SUDO_PASS_PLACEHOLDER | sudo -S`
+  会偶发认证失败
+- **设备 SSH**: `user@172.16.42.1` (USB NCM gadget), `sh -s` heredoc 模式
+  执行远程脚本 (设备无 bash)

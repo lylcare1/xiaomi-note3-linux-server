@@ -904,3 +904,59 @@ cpufreq@179c0000 节点也存在 (patch 0003)
 2. 修改 patch 0003: cpu 节点添加 `power-domains = <&apc_cprh 0/1>`
 3. patch 0006: cprh status 改为 "okay"
 4. 验证电压参数 (max_uV/min_uV/volt_cloop_adjust 等) — 需从下游 kernel 推断, 高风险
+
+### CPU/GPU 现状分析 (2026-06-30 23:50)
+
+**设备状态**: pmOS 运行态 (SSH 可达), kernel 6.19.10-sdm660 (r4)
+(注: 用户称"已进入 fastboot", 但 `fastboot devices` 无输出, lsusb 显示
+`18d1:d001` = pmOS NCM gadget, 非 fastboot `18d1:d00d`)
+
+#### CPU 现状
+
+| 项目 | 值 |
+|------|-----|
+| 在线核心 | 8 核 (cpu0-cpu7) 全部在线 |
+| BogoMIPS | 38.40 (所有核心一致, **极低**) |
+| cpufreq sysfs | **不存在** (`/sys/devices/system/cpu/cpu0/cpufreq/` 缺失) |
+| dmesg | `cpu cpu0: cpufreq_init: failed to get clk: -2` (ENOENT) |
+
+**分析**:
+- BogoMIPS=38.40 极低, 说明 CPU 运行在 bootloader 设置的默认低频率
+  (SDM660 正常 BogoMIPS 应在数百到上千量级)
+- `cpufreq_init: failed to get clk: -2` 是 cpufreq-dt 驱动尝试为 CPU 获取
+  clk 失败 (ENOENT). SDM660 mainline 无 CPU clk 驱动 (cpufreq-dt 路径
+  不可行), 必须走 cpufreq-hw (OSM) 路径, 而 OSM 三层硬依赖 CPR
+- 当前无任何调频能力, CPU 被锁在 bootloader 默认频率
+
+#### GPU 现状
+
+| 项目 | 值 |
+|------|-----|
+| 设备 | Adreno 512 (`qcom,adreno-512.0 qcom,adreno`) |
+| devfreq | 存在 (`/sys/class/devfreq/5000000.gpu/`) |
+| 当前频率 | 19200000 (19.2 MHz, 最低档, simple_ondemand 降频) |
+| 可用频率 | 19200000 160000000 266000000 370000000 465000000 588000000 |
+| governor | simple_ondemand |
+| speedbin | fuse 135 (0x87), opp-supp-hw 0x10 |
+
+**问题**:
+1. `supply vdd not found, using dummy regulator` — GPU vdd regulator 缺失
+2. `supply vddcx not found, using dummy regulator` — GPU vddcx regulator 缺失
+3. `Direct firmware load for qcom/a530_pm4.fw failed with error -2` — GPU 固件缺失
+4. `failed to load a530_pm4.fw` — msm_dpu 加载固件失败
+
+**分析**:
+- GPU devfreq 框架可用, simple_ondemand 正常工作 (空闲时降到 19.2 MHz)
+- 但 vdd/vddcx regulator 使用 dummy (无实际电压控制), 固件加载失败
+- GPU 已绑定到 msm_dpu 显示控制器 (`bound 5000000.gpu (ops a3xx_ops)`)
+- 无固件意味着 GPU 实际无法执行渲染任务, 仅 devfreq 接口可用
+- 对"无头 Linux 服务器"目标影响小 (服务器不需要 GPU 渲染)
+
+#### 结论
+
+- **CPU**: 调频完全不工作, 锁在 bootloader 默认低频. 启用 cpufreq 需完整
+  CPR 方案 (patch 0004 + 0003 + 0006 status=okay), 高风险
+- **GPU**: devfreq 可用但无固件/regulator, 实际不可用. 对服务器目标无影响,
+  可暂时忽略
+- **服务器目标优先级**: WiFi/SSH/rootfs 已满足, CPU 低频不影响 SSH 运维,
+  可考虑暂缓 cpufreq 启用, 优先验证长稳运行

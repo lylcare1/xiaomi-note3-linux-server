@@ -608,3 +608,29 @@ diff -u /tmp/patch-work/qcom-cpufreq-hw.c.orig /tmp/patch-work/qcom-cpufreq-hw.c
 ```
 
 **patch 0006 (CPRh DTS) 计划**: 用 MSM8998 偏移作占位 + `status="disabled"`, 因 SDM630 fuse 布局与 MSM8998 不同 (qfprom 物理地址 0x780000 vs 0x784000, qusb2_hstx_trim 偏移 0x243 vs 0x23a)。SDM630 需要 gold 5 corners + silver 3 corners (不同于 MSM8998 各 4 corners)。
+
+### patch 0006 (CPRh DTS 占位) 创建 + 编译验证通过 (2026-06-30)
+
+**patch 0006 — 已创建, 编译通过** ✅:
+- 文件: `refs/cpufreq-patches/0006-cprh-dts-placeholder.patch` (约 300 行)
+- 修改 `arch/arm64/boot/dts/qcom/sdm630.dtsi`:
+  1. qfprom 节点添加 34 个 CPR nvmem cells (2 全局 + gold 5×4 + silver 3×4)
+  2. 新增 `apc_cprh: power-controller@179c8000` 节点 (compatible `qcom,sdm630-cprh`, `qcom,cprh`)
+- **所有 fuse 偏移为 MSM8998 占位**, 加醒目 WARNING 注释说明不可信
+- **`status = "disabled"`** 确保驱动不 probe, 不会因偏移错误损坏硬件
+- cell 命名遵循 `cpr-common.c` 规则: `cpr{tid}_{ring_osc|init_voltage|quotient|quotient_offset}{i}` (1-indexed)
+- gold (cpr0) 5 corners, silver (cpr1) 3 corners (匹配 `sdm630_cpr_desc`)
+
+**编译修复**: 首次编译报 `sdm660.dtsi:12.15-26 syntax error`, 根因是 qfprom 节点缺少闭合 `};` (Python 生成脚本遗漏). 修复后 `pmbootstrap build --force` 成功.
+
+**当前 cpufreq patch 全栈状态** (0004/0005/0006):
+- ✅ 0004 (CPR3 驱动): 编译通过, 无需修改
+- ✅ 0005 (OSM 编程): 编译通过, 修复 3 个 6.19 API 错误
+- ✅ 0006 (CPRh DTS): 编译通过, PLACEHOLDER + status="disabled"
+- ⚠️ **运行时未验证**: cprh 节点 disabled, cpufreq-hw 驱动仍会因缺少 CPR genpd 而无法完整工作
+
+**下一步 (解除 0006 阻塞)**:
+1. 从下游 Xiaomi 内核提取 SDM630 cpr3-regulator 驱动的 qfprom fuse 偏移
+2. 或在设备上 dump qfprom 区域 (0x780000, 0x621c) 与 MSM8998 对比
+3. 替换占位偏移后, 把 cprh 节点 status 改为 "okay"
+4. 刷入设备验证 cpufreq + CPR3 是否工作

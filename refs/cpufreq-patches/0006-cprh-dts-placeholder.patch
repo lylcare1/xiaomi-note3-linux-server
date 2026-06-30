@@ -1,0 +1,287 @@
+--- a/arch/arm64/boot/dts/qcom/sdm630.dtsi
++++ b/arch/arm64/boot/dts/qcom/sdm630.dtsi
+@@ -609,8 +609,284 @@
+ 				reg = <0x41a2 0x2>;
+ 				bits = <5 8>;
+ 			};
++
++			/*
++			 * CPR3 nvmem cells for qcom,sdm630-cprh (PLACEHOLDER).
++			 *
++			 * WARNING: These offsets are copied from MSM8998 (msm8998-angelo.dtsi)
++			 * and have NOT been verified against SDM630/SDM660 real qfprom fuse
++			 * layout. MSM8998 and SDM630 qfprom differ (proven by qusb2_hstx_trim:
++			 * MSM8998 @ 0x23a, SDM630 @ 0x243). Using these offsets with
++			 * status="okay" would program invalid voltages and may damage the SoC.
++			 * The cprh node below is kept status="disabled" for safety.
++			 *
++			 * SDM630 CPR3 descriptor: gold (cpr0) = 5 fuse corners,
++			 * silver (cpr1) = 3 fuse corners. Naming: cpr{tid}_{field}{i}.
++			 */
++
++			/* Global CPR fuses */
++			cpr_speed_bin: cpr-speed-bin@133 {
++				reg = <0x133 0x2>;
++				bits = <5 3>;
++			};
++
++			cpr_fuse_revision: cpr-fuse-rev@13e {
++				reg = <0x13e 0x1>;
++				bits = <3 3>;
++			};
++
++			/* CPR0 (gold / PERFCL) - 5 fuse corners (PLACEHOLDER offsets) */
++			cpr0_ring_osc1: cpr0-ro1@22b {
++				reg = <0x22b 0x1>;
++				bits = <2 4>;
++			};
++
++			cpr0_ring_osc2: cpr0-ro2@22a {
++				reg = <0x22a 0x2>;
++				bits = <6 4>;
++			};
++
++			cpr0_ring_osc3: cpr0-ro3@22a {
++				reg = <0x22a 0x1>;
++				bits = <2 4>;
++			};
++
++			cpr0_ring_osc4: cpr0-ro4@229 {
++				reg = <0x229 0x2>;
++				bits = <6 4>;
++			};
++
++			cpr0_ring_osc5: cpr0-ro5@235 {
++				reg = <0x235 0x1>;
++				bits = <2 4>;
++			};
++
++			cpr0_init_voltage1: cpr0-ivolt1@22e {
++				reg = <0x22e 0x1>;
++				bits = <0 6>;
++			};
++
++			cpr0_init_voltage2: cpr0-ivolt2@22d {
++				reg = <0x22d 0x2>;
++				bits = <2 6>;
++			};
++
++			cpr0_init_voltage3: cpr0-ivolt3@22c {
++				reg = <0x22c 0x2>;
++				bits = <4 6>;
++			};
++
++			cpr0_init_voltage4: cpr0-ivolt4@22b {
++				reg = <0x22b 0x2>;
++				bits = <6 6>;
++			};
++
++			cpr0_init_voltage5: cpr0-ivolt5@236 {
++				reg = <0x236 0x1>;
++				bits = <0 6>;
++			};
++
++			cpr0_quotient1: cpr0-quot1@234 {
++				reg = <0x234 0x2>;
++				bits = <0 12>;
++			};
++
++			cpr0_quotient2: cpr0-quot2@232 {
++				reg = <0x232 0x2>;
++				bits = <4 12>;
++			};
++
++			cpr0_quotient3: cpr0-quot3@231 {
++				reg = <0x231 0x2>;
++				bits = <0 12>;
++			};
++
++			cpr0_quotient4: cpr0-quot4@22f {
++				reg = <0x22f 0x2>;
++				bits = <4 11>;
++			};
++
++			cpr0_quotient5: cpr0-quot5@235 {
++				reg = <0x235 0x2>;
++				bits = <0 12>;
++			};
++
++			cpr0_quotient_offset1: cpr0-qoff1@239 {
++				reg = <0x239 0x2>;
++				bits = <5 3>;
++			};
++
++			cpr0_quotient_offset2: cpr0-qoff2@238 {
++				reg = <0x238 0x2>;
++				bits = <6 7>;
++			};
++
++			cpr0_quotient_offset3: cpr0-qoff3@237 {
++				reg = <0x237 0x2>;
++				bits = <7 7>;
++			};
++
++			cpr0_quotient_offset4: cpr0-qoff4@236 {
++				reg = <0x236 0x2>;
++				bits = <0 7>;
++			};
++
++			cpr0_quotient_offset5: cpr0-qoff5@234 {
++				reg = <0x234 0x1>;
++				bits = <4 3>;
++			};
++
++			/* CPR1 (silver / PWRCL) - 3 fuse corners (PLACEHOLDER offsets) */
++			cpr1_ring_osc1: cpr1-ro1@219 {
++				reg = <0x219 0x2>;
++				bits = <4 4>;
++			};
++
++			cpr1_ring_osc2: cpr1-ro2@219 {
++				reg = <0x219 0x1>;
++				bits = <0 4>;
++			};
++
++			cpr1_ring_osc3: cpr1-ro3@218 {
++				reg = <0x218 0x2>;
++				bits = <4 4>;
++			};
++
++			cpr1_init_voltage1: cpr1-ivolt1@21c {
++				reg = <0x21c 0x2>;
++				bits = <2 6>;
++			};
++
++			cpr1_init_voltage2: cpr1-ivolt2@21b {
++				reg = <0x21b 0x2>;
++				bits = <4 6>;
++			};
++
++			cpr1_init_voltage3: cpr1-ivolt3@21a {
++				reg = <0x21a 0x2>;
++				bits = <6 6>;
++			};
++
++			cpr1_quotient1: cpr1-quot1@222 {
++				reg = <0x222 0x3>;
++				bits = <2 12>;
++			};
++
++			cpr1_quotient2: cpr1-quot2@220 {
++				reg = <0x220 0x3>;
++				bits = <6 12>;
++			};
++
++			cpr1_quotient3: cpr1-quot3@21f {
++				reg = <0x21f 0x2>;
++				bits = <2 11>;
++			};
++
++			cpr1_quotient_offset1: cpr1-qoff1@227 {
++				reg = <0x227 0x2>;
++				bits = <7 6>;
++			};
++
++			cpr1_quotient_offset2: cpr1-qoff2@227 {
++				reg = <0x227 0x1>;
++				bits = <0 7>;
++			};
++
++			cpr1_quotient_offset3: cpr1-qoff3@226 {
++				reg = <0x226 0x2>;
++				bits = <1 7>;
++			};
++
+ 		};
+ 
++		/*
++		 * CPR-Hardened (CPRh) power controller for SDM630/SDM660.
++		 * status="disabled" because the qfprom CPR fuse offsets above are
++		 * UNVERIFIED placeholders. Enabling without correct fuse offsets
++		 * will program invalid voltages and may damage the SoC.
++		 * Compatible "qcom,sdm630-cprh" is accepted by CPR3 driver
++		 * (cpr3.c, sdm630_cpr_acc_desc) via qcom,cpr3.yaml binding.
++		 */
++		apc_cprh: power-controller@179c8000 {
++			compatible = "qcom,sdm630-cprh", "qcom,cprh";
++			reg = <0x0179c8000 0x4000>, <0x0179c4000 0x4000>;
++
++			clocks = <&gcc GCC_HMSS_RBCPR_CLK>;
++			clock-names = "ref";
++
++			#power-domain-cells = <1>;
++			status = "disabled";
++
++			nvmem-cells = <&cpr_speed_bin>,
++					      <&cpr_fuse_revision>,
++					      <&cpr0_ring_osc1>,
++					      <&cpr0_ring_osc2>,
++					      <&cpr0_ring_osc3>,
++					      <&cpr0_ring_osc4>,
++					      <&cpr0_ring_osc5>,
++					      <&cpr0_init_voltage1>,
++					      <&cpr0_init_voltage2>,
++					      <&cpr0_init_voltage3>,
++					      <&cpr0_init_voltage4>,
++					      <&cpr0_init_voltage5>,
++					      <&cpr0_quotient1>,
++					      <&cpr0_quotient2>,
++					      <&cpr0_quotient3>,
++					      <&cpr0_quotient4>,
++					      <&cpr0_quotient5>,
++					      <&cpr0_quotient_offset1>,
++					      <&cpr0_quotient_offset2>,
++					      <&cpr0_quotient_offset3>,
++					      <&cpr0_quotient_offset4>,
++					      <&cpr0_quotient_offset5>,
++					      <&cpr1_ring_osc1>,
++					      <&cpr1_ring_osc2>,
++					      <&cpr1_ring_osc3>,
++					      <&cpr1_init_voltage1>,
++					      <&cpr1_init_voltage2>,
++					      <&cpr1_init_voltage3>,
++					      <&cpr1_quotient1>,
++					      <&cpr1_quotient2>,
++					      <&cpr1_quotient3>,
++					      <&cpr1_quotient_offset1>,
++					      <&cpr1_quotient_offset2>,
++					      <&cpr1_quotient_offset3>;
++
++			nvmem-cell-names = "cpr_speed_bin",
++					   "cpr_fuse_revision",
++					   "cpr0_ring_osc1",
++					   "cpr0_ring_osc2",
++					   "cpr0_ring_osc3",
++					   "cpr0_ring_osc4",
++					   "cpr0_ring_osc5",
++					   "cpr0_init_voltage1",
++					   "cpr0_init_voltage2",
++					   "cpr0_init_voltage3",
++					   "cpr0_init_voltage4",
++					   "cpr0_init_voltage5",
++					   "cpr0_quotient1",
++					   "cpr0_quotient2",
++					   "cpr0_quotient3",
++					   "cpr0_quotient4",
++					   "cpr0_quotient5",
++					   "cpr0_quotient_offset1",
++					   "cpr0_quotient_offset2",
++					   "cpr0_quotient_offset3",
++					   "cpr0_quotient_offset4",
++					   "cpr0_quotient_offset5",
++					   "cpr1_ring_osc1",
++					   "cpr1_ring_osc2",
++					   "cpr1_ring_osc3",
++					   "cpr1_init_voltage1",
++					   "cpr1_init_voltage2",
++					   "cpr1_init_voltage3",
++					   "cpr1_quotient1",
++					   "cpr1_quotient2",
++					   "cpr1_quotient3",
++					   "cpr1_quotient_offset1",
++					   "cpr1_quotient_offset2",
++					   "cpr1_quotient_offset3";
++		};
+ 		rng: rng@793000 {
+ 			compatible = "qcom,prng-ee";
+ 			reg = <0x00793000 0x1000>;

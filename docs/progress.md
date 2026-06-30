@@ -753,3 +753,37 @@ diff -u /tmp/patch-work/qcom-cpufreq-hw.c.orig /tmp/patch-work/qcom-cpufreq-hw.c
 2. **研究 SDM630 CPR fuse 偏移** (高风险, 需对比原厂 dtbo / downstream 源码)
 3. **放弃 cpufreq** (当前优先级 7, 设备可长期运行无需调频)
 4. **其他外设工作** (如 GPU/显示, 但服务器场景不需要)
+
+### cpufreq-dt 路径可行性分析 (2026-06-30 17:30)
+
+用户选择"修复 cpufreq-dt 路径", 经研究确认**此路径在 SDM660 上不可行**:
+
+**根因 1: SDM660 mainline 无 CPU clk 驱动**
+- `clk-cpu-8996.c` 只支持 `qcom,msm8996-apcc` (MSM8996 专用, 不兼容 SDM660)
+- `gcc-sdm660.c` 无 CPU clk (只有 hmss_rbcpr 等)
+- `apcs-msm8996.c` 只注册固定 300MHz `sys_apcs_aux` (不是可变 CPU clk)
+- 无 `apcs-sdm660.c` 专用驱动
+- mainline 所有 SDM630/SDM660 设备 (Nokia/Sony/BlackBerry) 都**无 cpufreq 配置**
+
+**根因 2: cpufreq-dt 需要 cpu 节点有 clocks 属性**
+- `cpufreq-dt.c` L98: `cpu_clk = clk_get(cpu_dev, NULL);`
+- `clk_get(dev, NULL)` 从 DT `clocks` 属性获取 clk
+- 设备 DT `cpus/cpu@0` 无 `clocks` 属性 → `clk_get` 返回 -ENOENT (-2)
+- 与 dmesg `cpu cpu0: cpufreq_init: failed to get clk: -2` 一致
+
+**根因 3: SDM660 CPU 频率由 OSM 硬件控制**
+- SDM660 用 OSM (Operating State Manager) + CPR 控制 CPU 频率/电压
+- 软件通过 cpufreq-hw 驱动操作 OSM 寄存器, 不走 clk tree
+- patch 0003 设计为 cpufreq-hw 路径 (添加 `qcom,freq-domain` 非 `clocks`)
+- patch 0005 OSM 编程**强依赖 CPR power domain** (L1407-1414, L450-468)
+
+**cpufreq-hw 路径的完整依赖链** (唯一可行路径):
+1. cpu 节点需添加 `power-domains = <&apc_cprh 0>;` (当前无)
+2. cprh 节点 `status` 改为 `"okay"` (当前 disabled)
+3. cprh 的 qfprom fuse 偏移必须正确 (当前是 MSM8998 placeholder, 未验证)
+4. cprh 驱动注册 power domain
+5. cpufreq-hw 附加 power domain, 获取 CPR 数据, 编程 OSM
+
+**风险**: fuse 偏移错误 → CPR 编程错误电压 → **可能损坏 SoC** (patch 0006 作者明确警告)
+
+**最终结论**: cpufreq 在 SDM660 上只有 cpufreq-hw + CPR 一条路径, 需要高风险 fuse 偏移验证. 建议放弃 cpufreq (优先级 7, 设备已通过压力测试无需调频).

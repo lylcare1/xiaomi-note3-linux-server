@@ -497,3 +497,75 @@ cpufreq_hw: cpufreq_hw@17816000 {
 - `/tmp/somainline-files/drivers/cpufreq/qcom-cpufreq-hw.c` — SoMainline 完整 OSM 驱动 (1852 行)
 - `/tmp/somainline-files/drivers/pmdomain/qcom/cpr3.c` — CPR3 驱动 (2711 行)
 - `/tmp/somainline-files/include/soc/qcom/cpr.h` — CPR3 公共头文件
+
+### patch 0003 修复 + 地址验证 (2026-06-30)
+
+**修复内容**:
+- 地址从 0x17d43000 改为 0x179c0000 (与 MSM8998 相同)
+- compatible 从 `qcom,sdm660-cpufreq-hw` 改为 `qcom,msm8998-cpufreq-hw`
+- 添加 6 个 reg 区域: osm-acd0/1, osm-domain0/1, freq-domain0/1
+- OPP 表修正为 SDM660 真实频率: A53 max 1843 MHz, A73 max 2457 MHz
+- 用 diff 生成正确行号的 patch (避免手动算行号错误)
+
+**验证结果** (刷入设备 + modprobe qcom-cpufreq-hw):
+- ✅ **设备正常启动, 不 panic** — 地址 0x179c0000 正确
+- ✅ **驱动成功 probe** — dmesg 显示 `qcom-cpufreq-hw 17914800.cpufreq` (osm-acd0 地址作为节点名)
+- ✅ **驱动读取了 Domain-0 和 Domain-1 的 enable 寄存器** — 没有访问错误
+- ❌ **cpufreq 仍未工作** — `cpufreq hardware not enabled`
+- ❌ **驱动注册失败** — `CPUFreq HW driver failed to register`
+
+**根因分析**:
+- mainline qcom-cpufreq-hw 驱动 **不认** `qcom,msm8998-cpufreq-hw` compatible
+- fallback 用 `qcom,cpufreq-hw` → `qcom_soc_data` (SDM845 的)
+- `qcom_soc_data` 只检查 enable 寄存器 (offset 0x0), 不做 OSM 编程
+- OSM 硬件未被 TZ 编程 (`uses_tz=false`), enable 位为 0
+- 驱动检测到 "hardware not enabled" → 拒绝注册
+
+**下一步**: 移植 SoMainline topic/cpr3hh 的 OSM 编程代码 (patch 0005)
+- 替换 mainline qcom-cpufreq-hw.c (761 行) 为 SoMainline 版本 (1852 行)
+- 添加 `qcom,msm8998-cpufreq-hw` compatible + `msm8998_soc_data`
+- `msm8998_soc_data` 包含 OSM 编程逻辑 (`uses_tz=false`, `reg_osm_sequencer=0x300`)
+- 需要适配 6.10→6.19 API 变化 (见 API 评估报告)
+
+**6.19 API 变化评估** (vs 6.10 SoMainline 代码):
+- 简单适配: `.remove_new` → `.remove`, 删除 boost 块, 创建 `include/soc/qcom/cpr.h`
+- 重大重构: `devm_pm_opp_attach_genpd` → `devm_pm_domain_attach_list`
+- cpr3.c 主体逻辑完全兼容 6.19.10 (genpd 架构, SCM 调用, regmap 等)
+- 总体难度: 中等 (大部分代码可直接复用)
+
+### patch 0004/0005 创建 + patch 0006 阻塞 (2026-06-30)
+
+**patch 0005 (cpufreq-hw OSM 编程) — 已创建**:
+- 替换 mainline qcom-cpufreq-hw.c (761 行) 为 SoMainline topic/cpr3hh 版本 (1852 行 → 1851 行)
+- 应用 5 个 API 变化:
+  1. `devm_pm_opp_attach_genpd` → `devm_pm_domain_attach_list` (重大重构, 使用 `PD_FLAG_REQUIRED_OPP`)
+  2. 删除 boost 块 (`policy_has_boost_freq` + `cpufreq_enable_boost_support` 在 6.19 中已移除)
+  3. `.remove_new` → `.remove` (6.19 platform_driver API)
+  4. `struct device **genpd_cpr_vdev` → `struct dev_pm_domain_list *genpd_list`
+  5. `dev_get_drvdata(*genpd_cpr_vdev)` → `dev_get_drvdata(genpd_list->pd_devs[0])`
+- patch 文件: `refs/cpufreq-patches/0005-cpufreq-hw-osm-programming.patch` (1495 行)
+- 工作目录: `/tmp/patch-work/qcom-cpufreq-hw.c.new`
+
+**patch 0004 (CPR3 驱动) — 已创建**:
+- 新增 4 个文件: `drivers/pmdomain/qcom/cpr3.c` (2710 行), `cpr-common.c` (361 行), `cpr-common.h` (109 行), `include/soc/qcom/cpr.h` (17 行)
+- 修改 2 个文件: `drivers/pmdomain/qcom/Kconfig` (添加 QCOM_CPR_COMMON + QCOM_CPR3), `Makefile` (添加 cpr-common.o + cpr3.o)
+- API 适配: 删除 `#include <linux/of_device.h>` (6.19 已移除, `of_device_get_match_data` 在 `linux/of.h` 中)
+- patch 文件: `refs/cpufreq-patches/0004-cpr3-driver.patch` (3275 行)
+
+**patch 0006 (CPRh DTS 节点) — 安全阻塞**:
+- **阻塞原因**: 缺少 SDM660 准确的 qfprom CPR cells 偏移地址
+- **依赖链**: cpufreq-hw (`uses_tz=false`) → 需要 CPR3 genpd → CPR3 驱动需要 qfprom nvmem cells → 需要 35 个 cells 的精确偏移
+- **搜索结果**:
+  - SoMainline topic/cpr3hh: 有驱动代码, 无 SDM660 cprh DTS
+  - 上游 CPR3 v14/v15 patch 系列: 只有 MSM8998 DTS, 无 SDM630/660
+  - 下游 Xiaomi 内核: 用私有 cpufreq 驱动, 无 mainline 格式 qfprom CPR cells
+  - pmOS wiki: SDM660 CPU 状态 "Partial"
+- **MSM8998 vs SDM630 qfprom**: 物理地址不同 (MSM8998=0x784000, SDM630=0x780000), 内部偏移可能不同
+- **风险**: 偏移错误 → CPR3 读取错误校准数据 → 设置错误电压 → 硬件损坏
+- **MSM8998 参考 DTS**: `/tmp/sdm660ml/msm8998-angelo.dtsi` L1294-1469 (35 个 qfprom cells)
+
+**未来解决方案** (需要其一):
+1. 从下游 Xiaomi 内核 C 代码中提取 SDM660 qfprom CPR 偏移 (需要下游 cpr3-regulator 驱动源码)
+2. 在设备上 dump qfprom 区域 (0x780000, 0x621c) 并与 MSM8998 对比
+3. 等待上游社区为 SDM630/660 添加 cprh DTS
+4. 修改 cpufreq-hw 驱动跳过 CPR3 依赖 (OSM 编程不完整, 可能不稳定)

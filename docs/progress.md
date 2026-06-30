@@ -569,3 +569,42 @@ cpufreq_hw: cpufreq_hw@17816000 {
 2. 在设备上 dump qfprom 区域 (0x780000, 0x621c) 并与 MSM8998 对比
 3. 等待上游社区为 SDM630/660 添加 cprh DTS
 4. 修改 cpufreq-hw 驱动跳过 CPR3 依赖 (OSM 编程不完整, 可能不稳定)
+
+### patch 0004/0005 编译验证通过 (2026-06-30)
+
+**验证方式**: `pmbootstrap build --force linux-postmarketos-qcom-sdm660`
+
+**修复的 3 个编译错误** (均为 Linux 6.19 API 变化):
+1. **cpufreq `.exit` 回调返回类型**: `int` → `void`
+   - 错误: `incompatible function pointer types initializing 'void (*)(struct cpufreq_policy *)'`
+   - 修复: `qcom_cpufreq_hw_cpu_exit` 返回类型改 `void`, 移除 `return 0;`
+2. **未导出的 cpufreq 符号**: 移除 `qcom_cpufreq_hw_attr[]` 数组
+   - 错误: `modpost: "cpufreq_freq_attr_scaling_available_freqs" undefined!`
+   - 原因: 这两个符号在 6.19 中声明存在 (`include/linux/cpufreq.h` L1229) 但**未 `EXPORT_SYMBOL`**, 模块无法引用
+   - 修复: 删除 `qcom_cpufreq_hw_attr` 数组和 `.attr = qcom_cpufreq_hw_attr` 赋值 (mainline 6.19 驱动也没有 `.attr`)
+3. **patch 格式损坏** (malformed patch at line 1353):
+   - 原因: 手动编辑 patch 文件时把 `-`/`+` 行改为 context 行产生 no-op hunk
+   - 修复: 放弃手动编辑, 改为修复源文件 `/tmp/patch-work/qcom-cpufreq-hw.c.fixed` 后 `diff -u` 重新生成 patch
+
+**patch 0004 (CPR3 驱动) 状态**: ✅ 编译通过, **无需修改**
+- `cpr3.c` 的 `cpr_remove` 已返回 `void` (6.19 兼容)
+- Kconfig `QCOM_CPR3` depends on `ARCH_QCOM && HAS_IOMEM`, selects `QCOM_CPR_COMMON`
+- `QCOM_CPR_COMMON` 是 hidden tristate (无 prompt), 被 `QCOM_CPR` 和 `QCOM_CPR3` select
+
+**kernel config 修改**: 在 `CONFIG_QCOM_CPR=m` 后添加 `CONFIG_QCOM_CPR3=m`
+
+**APKBUILD 修改**: source 列表添加 `0004-cpr3-driver.patch` 和 `0005-cpufreq-hw-osm-programming.patch`, sha512sums 已通过 `pmbootstrap checksum` 更新
+
+**构建结果**: `=> edge/linux-postmarketos-qcom-sdm660: Done!` (第 5 次尝试成功)
+
+**修复方法** (patch 重新生成流程):
+```bash
+# 1. 编辑修复后的源文件
+vi /tmp/patch-work/qcom-cpufreq-hw.c.fixed
+# 2. 用 diff -u 重新生成 patch (避免手动编辑 patch)
+diff -u /tmp/patch-work/qcom-cpufreq-hw.c.orig /tmp/patch-work/qcom-cpufreq-hw.c.fixed > 0005.patch
+# 3. 调整 patch 头 (--- a/ +++ b/)
+# 4. 复制到 pmaports + checksum + build --force
+```
+
+**patch 0006 (CPRh DTS) 计划**: 用 MSM8998 偏移作占位 + `status="disabled"`, 因 SDM630 fuse 布局与 MSM8998 不同 (qfprom 物理地址 0x780000 vs 0x784000, qusb2_hstx_trim 偏移 0x243 vs 0x23a)。SDM630 需要 gold 5 corners + silver 3 corners (不同于 MSM8998 各 4 corners)。

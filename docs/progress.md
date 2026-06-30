@@ -634,3 +634,26 @@ diff -u /tmp/patch-work/qcom-cpufreq-hw.c.orig /tmp/patch-work/qcom-cpufreq-hw.c
 2. 或在设备上 dump qfprom 区域 (0x780000, 0x621c) 与 MSM8998 对比
 3. 替换占位偏移后, 把 cprh 节点 status 改为 "okay"
 4. 刷入设备验证 cpufreq + CPR3 是否工作
+
+### SDM630 CPR fuse 偏移调研结论 (2026-06-30)
+
+**结论: SDM630 cprh DTS 从未在上游或 SoMainline 实现, fuse 偏移无法从公开资料获取**
+
+**调研证据**:
+1. **CPR3 binding YAML** (`qcom,cpr3.yaml`): `qcom,sdm630-cprh` compatible 存在 (作为 enum 值, fallback `qcom,cprh`), 但**没有针对 SDM630 的 nvmem-cell-names 约束** — 只有 MSM8998 有 32-cell 约束. 说明 SDM630 cprh DTS 节点从未被提交到上游.
+2. **CPR3 驱动** (`cpr3.c`): 有 `sdm630_cpr_acc_desc` 描述符 (gold 5 corners + silver 3 corners), 但驱动数据不包含 fuse 偏移 — 偏移必须来自 DTS.
+3. **SoMainline topic/cpr3hh**: 有驱动代码 + MSM8998 DTS, 无 SDM630 cprh DTS.
+4. **下游 Xiaomi jason 内核**: 用私有 `qcom,clk-cpu-osm` 驱动 (非 mainline CPR3 模型), efuse 在 `0x784130` 连续 8 字节区域, 通过 `qcom,pwrcl-speedbinN-vM` 属性直接编码校准数据. 与 mainline CPR3 的逐 nvmem cell 模型不兼容, 无法直接提取偏移.
+5. **pmOS wiki**: SDM630/SDM660 CPU 状态 "Partial" (cpufreq 不完整).
+
+**MSM8998 vs SDM630 cell 差异** (binding 约束):
+- MSM8998: 32 cells (2 全局 + 每线程 15 = 4 corners × 4 fields, 但 quotient_offset 只有 2-4 即 3 个)
+- SDM630 需要: gold 5 corners + silver 3 corners, cell 数量不同 (约 34)
+- cpr-common.c 为每个 corner 生成 quotient_offset{i+1}, 但 MSM8998 DTS 不提供 offset1 (corner 0 offset 通常为 0)
+
+**可行路径** (按风险排序):
+1. **设备 dump qfprom** — 在设备上 `dd if=/dev/mem` 读 qfprom 区域, 与 MSM8998 fuse 布局对比推断. 风险: 上次读 qfprom 导致设备卡死.
+2. **逆向下游 cpr3-regulator 驱动** — 获取 Xiaomi jason 下游内核 `msm-cpufreq-hw.c` 或 `cpr3-regulator.c` 源码, 提取 fuse 偏移常量. 需要找到 CodeLinaro 或 Xiaomi 开源仓库正确文件.
+3. **等待上游** — 等 Konrad Dybcio 或社区为 SDM630 提交 cprh DTS (可能数月或数年).
+
+**当前决策**: cpufreq patch 全栈 (0004/0005/0006) 编译通过, 作为框架保存. cprh 节点保持 `status="disabled"`. 转向更高优先级工作 (设备 SSH 恢复, 优先级 5 > cpufreq 优先级 7).

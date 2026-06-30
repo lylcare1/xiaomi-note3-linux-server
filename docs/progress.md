@@ -657,3 +657,41 @@ diff -u /tmp/patch-work/qcom-cpufreq-hw.c.orig /tmp/patch-work/qcom-cpufreq-hw.c
 3. **等待上游** — 等 Konrad Dybcio 或社区为 SDM630 提交 cprh DTS (可能数月或数年).
 
 **当前决策**: cpufreq patch 全栈 (0004/0005/0006) 编译通过, 作为框架保存. cprh 节点保持 `status="disabled"`. 转向更高优先级工作 (设备 SSH 恢复, 优先级 5 > cpufreq 优先级 7).
+
+### 设备 SSH 恢复 + 状态确认 (2026-06-30)
+
+**事件**: 上次会话读取 qfprom 导致设备内核死锁 (USB NCM gadget 在线但 ARP 无响应, MaxPower=2mA 异常低).
+
+**恢复操作**:
+1. 物理重启 (长按电源键 10-15 秒强制关机, 再短按开机)
+2. 设备自动启动进入 postmarketOS (无 fastboot/TWRP 介入)
+3. USB NCM 网卡 enx5e5506ef1ca3 重新上线, 主机配置 `172.16.42.2/24` 后 ping 通
+
+**SSH 认证纠正** (重要):
+- 之前误用 `sshpass -p 1234 ssh user@172.16.42.1` — 错误 (user + 密码认证被拒)
+- 正确方式: `ssh jason` (别名 = `ssh root@172.16.42.1`, ed25519 公钥认证)
+- 认证配置: `~/.ssh/config.d/jason.conf` + `~/.ssh/id_ed25519_jason` (私钥) + ssh-agent (jason-host key)
+- 设备端: root 登录, 密码认证禁用 (root 密码锁定 `!`)
+
+**设备状态确认** (2026-06-30 09:09 UTC):
+- 内核: `6.19.10-sdm660 #3-postmarketos-qcom-sdm660` (编译时间 Tue Jun 30 03:11:51 UTC)
+- **内核包版本: `6.19.10-r0`** (设备仍跑旧内核, 我们构建的 `r2` 含 patch 0003-0006 未刷入)
+- rootfs: `/dev/loop0p2` 49.3G, 已用 828M, 可读写
+- WiFi: wlan0 已连接 192.168.1.3 (ChinaNet-810)
+- USB: usb0 172.16.42.1/16
+- Modem: running (MBA booted, mpss loaded)
+- ath10k: WCN3990 firmware ver (api 5), 关联到 AP 20:5e:0d:b8:be:80
+
+**cpufreq 当前状态 (未刷新内核)**:
+- `/sys/devices/system/cpu/cpu0/cpufreq/` 不存在 (cpufreq 子系统未注册)
+- `scaling_driver` 不存在
+- DT 节点: `/sys/firmware/devicetree/base/soc/cpufreq*` 不存在 (旧内核无 patch 0003)
+- 模块存在但未加载: `qcom-cpufreq-hw.ko.zst`, `qcom-cpufreq-nvmem.ko.zst`, `cpr.ko.zst` (老 cpr, 非 cpr3)
+- dmesg 错误: `cpu cpu0: cpufreq_init: failed to get clk: -2` (cpufreq-dt 驱动, -2=ENOENT)
+- dmesg 错误: `cpufreq-dt cpufreq-dt: failed register driver: -19` (-19=ENODEV)
+
+**其他已知错误 (非阻塞)**:
+- `msm_dpu: failed to load a530_pm4.fw` (GPU firmware, 非服务器需求)
+- `spmi cleanup_irq apid=52` (SPMI 中断清理, 无害)
+
+**结论**: 设备完全恢复, SSH 可达. cpufreq 完全不工作 (旧内核无 patch). 新内核包 `r2` 已就绪待刷入验证.

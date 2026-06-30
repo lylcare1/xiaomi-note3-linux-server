@@ -830,3 +830,38 @@ cpufreq@179c0000 节点也存在 (patch 0003)
   4. cpufreq-hw 驱动附加 CPR power domain 并编程 OSM
 
 **风险提醒**: fuse 偏移错误 → CPR 编程错误电压 → **可能损坏 SoC**, 不建议在无示波器/调试手段下启用.
+
+### SDM660 cprh fuse 偏移下游 kernel 提取 (2026-06-30 23:00)
+
+**来源**: LineageOS android_kernel_xiaomi_sdm660 (lineage-20 分支) `drivers/regulator/cprh-kbss-regulator.c`
+
+**发现**: mainline cpr3 驱动 (patch 0004) 通过 DT nvmem cells 读取 fuse (非硬编码). cell 名称动态拼接: `cpr{tid}_{field}{i}` (tid=0 gold, tid=1 silver).
+
+**SDM660 真实 fuse 偏移** (从下游 `sdm660_kbss_*_param` 提取, 格式 {row, bit_start, bit_end}, row 单位=8 byte):
+
+- cpr_speed_bin: {38, 29, 31}
+- cpr_fuse_revision: {71, 28, 30}
+- cpr0 (gold/PERFCL) 5 corners: ro_sel/init_voltage/target_quot/quot_offset 全部提取
+- cpr1 (silver/PWRCL) 5 corners: ro_sel/init_voltage/target_quot/quot_offset 全部提取
+
+**关键发现 1: patch 0006 偏移大量错误**
+- 34 个 cell 中仅 5 个正确 (speed_bin, cpr1_ring_osc1/2, cpr1_init_voltage1/2 — 因 SDM660 power 簇复用 MSM8998 部分位置)
+- 27 个偏移错误, 2 个位宽错误 (cpr0_quotient4/cpr1_quotient3 占位 11 位, 实际 12 位)
+
+**关键发现 2: 驱动描述符不足 (阻塞)**
+- mainline `sdm630_thread_silver.num_fuse_corners = 3`
+- SDM660 silver (PWRCL) 簇实际需要 5 corners (LOWSVS/SVS/SVSPLUS/NOM/TURBO_L1)
+- 即使 DT 正确, 驱动也不会读取 silver corner 4/5 的 fuse
+- 需在 patch 0004 新增 `sdm660_cpr_desc` (silver=5 corners) + `qcom,sdm660-cprh` compatible
+
+**SDM660 参考电压** (下游 `sdm660_kbss_fuse_ref_volt`):
+- gold (PERFORMANCE): {724000, 788000, 868000, 988000, 1068000} μV
+- silver (POWER): {644000, 724000, 788000, 868000, 1068000} μV
+
+**完整启用 cpufreq 的工作量**:
+1. 修改 patch 0006: 替换 27 个错误偏移 + 添加 cpr1 corner 4/5 + status=okay + cpu 节点 power-domains
+2. 修改 patch 0004: 添加 sdm660_thread_gold/silver + sdm660_cpr_desc + sdm660_cpr_acc_desc + compatible
+3. 修改 patch 0003: cpu 节点添加 power-domains = <&apc_cprh 0/1>
+4. 构建 kernel + 刷入 + 验证
+
+**风险**: 即使偏移来自下游 kernel, mainline cpr3 驱动框架与下游 cpr3-regulator 不同, 电压参数 (max_uV/min_uV/volt_cloop_adjust 等) 未验证, 仍可能损坏 SoC.

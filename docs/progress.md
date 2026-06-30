@@ -415,3 +415,85 @@ USB SSH 不通的根因(综合社区调研 + agent 核查):
 - SSH 可达, WiFi 正常
 
 **注意**: a530_pm4.fw 加载失败是已知问题 (jason 是 Adreno 512, 但驱动请求 a530), 不影响显示功能。如后续仍有 DPU timeout, 可考虑 cmdline 加 `video=DSI-1:d` 完全禁用显示。
+
+### OSM 物理地址确认 (2026-06-30, 关键突破)
+
+**问题**: 之前 patch 0003 使用地址 `0x17d43000`, /dev/mem 读 0x17d42000 触发 panic。需确认 SDM660 真实 OSM 地址。
+
+**调研来源**:
+1. **下游 Xiaomi kernel** (MiCode/Xiaomi_Kernel_OpenSource, `jason-p-oss` 分支) `sdm660.dtsi`:
+   - `clock_cpu: qcom,clk-cpu-660@179c0000` — 下游 OSM 块 (16KB) 起始地址 **0x179c0000**
+   - compatible = `qcom,clk-cpu-osm` (下游专用驱动, 非 mainline cpufreq-hw)
+   - 整块 reg = `<0x179c0000 0x4000>` (16KB 覆盖 OSM + freq domain 0/1)
+2. **AngeloGioacchino MSM8998 bringup DTS** (SoMainline/linux `angelo/somainline-msm8998-bringup` 分支) `msm8998-angelo.dtsi`:
+   - `cpufreq_hw@17816000` 节点 (注意: 单元地址用 osm-acd0 的地址, 起始 reg 是 osm-acd0)
+   - 6 个 reg 区域, 完整 OSM 地址映射
+3. **SoMainline linux topic/cpr3hh 分支** — 完整 OSM + CPR3 驱动代码 (1852 行 cpufreq-hw.c + 2711 行 cpr3.c)
+   - SDM630/660 使用 `msm8998_soc_data` (compatible = `qcom,msm8998-cpufreq-hw`)
+   - `uses_tz = false` (OSM 不由 TZ 预编程, 必须 OS 编程)
+   - `reg_osm_sequencer = 0x300`
+
+**关键结论**: **SDM660 OSM 地址 = 0x179c0000, 与 MSM8998 完全相同**。之前 patch 0003 使用的 `0x17d43000` 是 **SDM845** 的地址 (从 mainline DT bindings example 抄的, 不是 SDM660 的)。
+
+**完整地址映射** (SDM630/660 = MSM8998):
+
+| 寄存器 | 物理地址 | 大小 | reg-name | 用途 |
+|--------|----------|------|----------|------|
+| osm-acd0 | 0x17914800 | 0x100 | "osm-acd0" | ACD (Array Clock Domain) 配置 perfcl |
+| osm-acd1 | 0x17814800 | 0x100 | "osm-acd1" | ACD 配置 pwrcl |
+| osm-domain0 | 0x179c0000 | 0x1000 | "osm-domain0" | OSM 编程域 0 (perfcl/A73) |
+| freq-domain0 | 0x179c1000 | 0x1000 | "freq-domain0" | 频率 LUT 域 0 |
+| osm-domain1 | 0x179c2000 | 0x1000 | "osm-domain1" | OSM 编程域 1 (pwrcl/A53) |
+| freq-domain1 | 0x179c3000 | 0x1000 | "freq-domain1" | 频率 LUT 域 1 |
+| CPRh ctrl 0 | 0x179c8000 | 0x4000 | (cprh 节点) | CPR-Hardened 控制器 0 |
+| CPRh ctrl 1 | 0x179c4000 | 0x4000 | (cprh 节点) | CPR-Hardened 控制器 1 |
+| APCS common | 0x179d1000 | 0x1000 | (下游) | APCS 通用寄存器 |
+
+**SDM660 CPU 频率表** (来自下游 `qcom,msm-cpufreq` 节点):
+- **PWRCL (A53, cpu4-7)**: 633600, 902400, 1113600, 1401600, 1536000, 1612800, 1747200, **1843200** (max 1843 MHz)
+- **PERFCL (A73, cpu0-3)**: 1113600, 1401600, 1747200, 1804800, 1958400, 2150400, 2208000, **2457600** (max 2457 MHz)
+
+注: 之前 patch 0003 的 OPP 表用了 1766/2208 MHz 是错误的 (那是 SDM630/636 的频率, 不是 SDM660)。
+
+**MSM8998 Angelo DTS cpufreq_hw 节点参考** (`/tmp/sdm660ml/msm8998-angelo.dtsi` L3041-3056):
+```dts
+cpufreq_hw: cpufreq_hw@17816000 {
+    compatible = "qcom,cpufreq-hw-8998";
+    reg = <0x017914800 0x100>,  <0x017814800 0x100>,
+          <0x0179c0000 0x1000>, <0x0179c1000 0x1000>,
+          <0x0179c2000 0x1000>, <0x0179c3000 0x1000>;
+    reg-names = "osm-acd0", "osm-acd1",
+                "osm-domain0", "freq-domain0",
+                "osm-domain1", "freq-domain1";
+    clocks = <&rpmcc RPM_SMD_XO_A_CLK_SRC>,
+             <&gcc HMSS_GPLL0_CLK_SRC>;
+    clock-names = "xo", "alternate";
+    #freq-domain-cells = <1>;
+    status = "disabled";
+};
+```
+
+**MSM8998 Angelo DTS CPRh 节点参考** (`/tmp/sdm660ml/msm8998-angelo.dtsi` L3124-3206):
+- `power-controller@179c8000` compatible = `qcom,msm8998-cprh`
+- 35 个 qfprom nvmem cells (cpr_efuse_speedbin, cpr_fuse_revision, cpr_quot*_pwrcl/perfcl 等)
+- `#power-domain-cells = <1>`
+- CPU 节点用 `power-domains = <&apc_cprh 0/1>` 引用
+
+**驱动侧关键发现**:
+- mainline 6.19.10 `qcom-cpufreq-hw.c` 只有 761 行, **不含 OSM 编程代码**, 只有 `qcom,cpufreq-hw` 和 `qcom,cpufreq-epss` 两个 compatible
+- SoMainline topic/cpr3hh `qcom-cpufreq-hw.c` 有 1852 行, **含完整 OSM 编程代码**, 增加 `qcom,msm8998-cpufreq-hw` compatible + `msm8998_soc_data` (`uses_tz = false`, `reg_osm_sequencer = 0x300`)
+- `osm-domain0/1` 是 **必需的** (驱动 `platform_get_resource_byname(IORESOURCE_MEM, "osm-domain0")`, 缺失返回 -ENODEV)
+- `osm-acd0/1` 是 **可选的** (缺失则跳过 ACD 初始化, 返回 0)
+- CPR3 驱动 compatible: `qcom,sdm630-cprh` (SDM630/660) 和 `qcom,msm8998-cprh` (MSM8998), 共用 `msm8998_cpr_acc_desc` 之外的 `sdm630_cpr_acc_desc`
+
+**下一步计划** (分阶段验证):
+1. **阶段 1 (最小化)**: 修复 patch 0003 — 改地址为 0x179c1000/0x179c3000, 改 compatible 为 `qcom,msm8998-cpufreq-hw`, 添加 osm-domain0/1 + osm-acd0/1。先验证地址正确性 (不 panic)。
+2. **阶段 2 (OSM 编程)**: 移植 SoMainline topic/cpr3hh 的 cpufreq-hw.c (含 OSM 编程代码) + cpr3.c + cpr-common.c/h
+3. **阶段 3 (CPRh DTS)**: 添加 CPRh DTS 节点 + qfprom nvmem cells
+
+**关键文件**:
+- `/tmp/sdm660ml/sdm660.dtsi.jason` — 下游 Xiaomi SDM660 DTS (OSM 地址权威源)
+- `/tmp/sdm660ml/msm8998-angelo.dtsi` — MSM8998 OSM+CPRh DTS 节点参考
+- `/tmp/somainline-files/drivers/cpufreq/qcom-cpufreq-hw.c` — SoMainline 完整 OSM 驱动 (1852 行)
+- `/tmp/somainline-files/drivers/pmdomain/qcom/cpr3.c` — CPR3 驱动 (2711 行)
+- `/tmp/somainline-files/include/soc/qcom/cpr.h` — CPR3 公共头文件

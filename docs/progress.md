@@ -865,3 +865,42 @@ cpufreq@179c0000 节点也存在 (patch 0003)
 4. 构建 kernel + 刷入 + 验证
 
 **风险**: 即使偏移来自下游 kernel, mainline cpr3 驱动框架与下游 cpr3-regulator 不同, 电压参数 (max_uV/min_uV/volt_cloop_adjust 等) 未验证, 仍可能损坏 SoC.
+
+### patch 0006 DT 偏移修正 + 设备验证 (2026-06-30 23:35)
+
+**操作**:
+1. 修改 patch 0006: 用 SDM660 真实偏移替换 27 个错误 placeholder + 新增 cpr1 corner 4/5 (8 个新 cell)
+2. compatible 改为 `qcom,sdm660-cprh` (为将来驱动修改做准备)
+3. 保留 `status="disabled"` (驱动仍用 sdm630_cpr_desc, 不支持 SDM660 silver 5 corners)
+4. 更新 APKBUILD sha512sum + pkgrel=4, 构建 r4 kernel
+5. append_dtb + deploy.sh 生成 boot.img (23359488 bytes)
+6. SSH + dd 刷入 mmcblk1p62, sysrq reboot
+
+**设备验证结果**:
+```
+/sys/firmware/devicetree/base/soc@0/power-controller@179c8000:
+  compatible = "qcom,sdm660-cprh\0qcom,cprh"
+  status = "disabled"
+  nvmem-cell-names = 42 个 (cpr0 1-5 + cpr1 1-5, 各 4 字段)
+  
+新增 cpr1 corner 4/5 全部存在:
+  cpr1_ring_osc4/5, cpr1_init_voltage4/5, 
+  cpr1_quotient4/5, cpr1_quotient_offset4/5
+
+偏移验证 (cpr_fuse_revision):
+  DT 节点: cpr-fuse-rev@23b
+  reg = <0x23b 0x1>, bits = <4 3>
+  (下游 {71, 28, 30} → 0x23b, 正确)
+  (MSM8998 placeholder 是 0x13e, 已修正)
+```
+
+**当前状态**:
+- DT 偏移已全部修正为 SDM660 真实值 ✅
+- cprh status=disabled, 驱动未绑定 (安全)
+- cpufreq 仍不工作 (cpufreq-dt 路径无 clocks, cpufreq-hw 路径需 cprh status=okay + 驱动修改)
+
+**完整启用 cpufreq 的剩余工作** (未执行):
+1. 修改 patch 0004: 添加 `sdm660_cpr_desc` (silver=5 corners) + `qcom,sdm660-cprh` compatible
+2. 修改 patch 0003: cpu 节点添加 `power-domains = <&apc_cprh 0/1>`
+3. patch 0006: cprh status 改为 "okay"
+4. 验证电压参数 (max_uV/min_uV/volt_cloop_adjust 等) — 需从下游 kernel 推断, 高风险

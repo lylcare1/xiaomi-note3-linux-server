@@ -787,3 +787,46 @@ diff -u /tmp/patch-work/qcom-cpufreq-hw.c.orig /tmp/patch-work/qcom-cpufreq-hw.c
 **风险**: fuse 偏移错误 → CPR 编程错误电压 → **可能损坏 SoC** (patch 0006 作者明确警告)
 
 **最终结论**: cpufreq 在 SDM660 上只有 cpufreq-hw + CPR 一条路径, 需要高风险 fuse 偏移验证. 建议放弃 cpufreq (优先级 7, 设备已通过压力测试无需调频).
+
+### patch 0006 (cprh DT 节点) 设备验证 (2026-06-30 22:42)
+
+**目的**: 验证 r3 kernel (含 patch 0006) 的 cprh DT 节点在设备上正确出现.
+
+**操作**:
+1. r3 kernel 包 (`linux-postmarketos-qcom-sdm660-6.19.10-r3.apk`) 已构建, 含 patch 0006
+2. append_dtb: `cat vmlinuz sdm660-xiaomi-jason.dtb > kernel` (10890975 bytes)
+3. deploy.sh --build-only 生成 boot.img (23355392 bytes, cmdline UUID 正确)
+4. 设备在 pmOS 运行态 (非 fastboot), 通过 `cat boot.img | ssh jason 'dd of=/dev/mmcblk1p62 bs=4M conv=fsync'` 刷入
+5. `echo b > /proc/sysrq-trigger` 强制重启 (chroot 中 reboot 被忽略)
+6. 重启后 SSH 验证
+
+**验证结果**:
+```
+/sys/firmware/devicetree/base/soc@0/power-controller@179c8000:
+  compatible = "qcom,sdm630-cprh\0qcom,cprh"
+  status = "disabled"
+  #power-domain-cells = <1>
+  nvmem-cells = <34 phandles>
+  nvmem-cell-names = "cpr_speed_bin\0cpr_fuse_revision\0..." (600 bytes)
+  clocks/clock-names = 存在
+
+cpufreq@179c0000 节点也存在 (patch 0003)
+```
+
+**cpufreq 运行时状态** (符合预期, 仍不工作):
+- `/sys/devices/system/cpu/cpu0/cpufreq/` 不存在
+- dmesg: `cpu cpu0: cpufreq_init: failed to get clk: -2` (ENOENT, cpu 节点无 clocks 属性)
+- dmesg: `cpufreq-dt cpufreq-dt: failed register driver: -19` (ENODEV)
+- dmesg: `gcc-sdm660 sync_state() pending due to 17914800.cpufreq`
+
+**结论**:
+- patch 0006 DT 节点添加成功 ✅ (cprh 节点出现在 `/sys/firmware/devicetree/base/`)
+- cprh status=disabled, 驱动未绑定 (符合 patch 设计)
+- cpufreq 仍不工作 (cpufreq-dt 路径无 clocks 属性, cpufreq-hw 路径需 cprh status=okay + 正确 fuse)
+- 验证了之前分析: 仅添加 cprh DT 节点不足以让 cpufreq 工作, 还需要:
+  1. cprh status 改为 "okay"
+  2. qfprom fuse 偏移正确 (当前是 MSM8998 placeholder, 高风险)
+  3. cpu 节点添加 `power-domains = <&cprh 0>` 属性
+  4. cpufreq-hw 驱动附加 CPR power domain 并编程 OSM
+
+**风险提醒**: fuse 偏移错误 → CPR 编程错误电压 → **可能损坏 SoC**, 不建议在无示波器/调试手段下启用.

@@ -695,3 +695,61 @@ diff -u /tmp/patch-work/qcom-cpufreq-hw.c.orig /tmp/patch-work/qcom-cpufreq-hw.c
 - `spmi cleanup_irq apid=52` (SPMI 中断清理, 无害)
 
 **结论**: 设备完全恢复, SSH 可达. cpufreq 完全不工作 (旧内核无 patch). 新内核包 `r2` 已就绪待刷入验证.
+
+---
+
+## 设备恢复 + cpufreq 状态确认 (2026-06-30 17:10)
+
+### 触发
+上次会话刷入含 cprh dtb + 新 initramfs 的 boot.img 到 boot 分区 (mmcblk1p62) 后, 设备内核死锁 (MaxPower=2mA, 所有端口 closed). 用户手动进 fastboot 后, 本次会话执行恢复.
+
+### 恢复过程 (关键纠错)
+
+**第一次尝试 (失败)**: 用 `artifacts/jason-boot-v3-20260629.img` 通过 fastboot 刷 boot 分区. 设备启动后进入 pmOS initramfs debug shell (端口 23), **不是**正常启动.
+
+**根因发现**: `artifacts/jason-boot-v3-20260629.img` 的 cmdline UUID 与设备实际 rootfs 子分区 UUID 不匹配:
+- boot.img cmdline: `pmos_boot_uuid=6aef81a4-... pmos_root_uuid=d1f36c4b-...`
+- 设备实际子分区: boot=`c3111c1f-...`, root=`55b176e9-...` (与 manifest 记录一致)
+- initramfs `mount_subpartitions()` 用 losetup 成功创建了 loop1p1/p2, 但因 UUID 不匹配而 `losetup -d` 卸载, 10s 后报 `ERROR: failed to mount subpartitions!` 进 debug shell
+
+**正确文件**: `/tmp/jason-boot-initramfs.img` (23355392 bytes, 06-30 11:18 创建) 含正确 UUID. kernel build 时间 `Tue Jun 30 03:11:51 UTC 2026` (新 kernel, 含 patch 0005 OSM 编程).
+
+**恢复方法 (无需 fastboot)**:
+1. 设备在 debug shell (端口 23 telnet), 通过 `nc 172.16.42.1 23` 交互
+2. 主机启动 HTTP 服务器: `python3 -m http.server 8080 --bind 172.16.42.2`
+3. 设备 wget 下载: `wget -O /tmp/boot.img http://172.16.42.2:8080/jason-boot-initramfs.img`
+4. dd 修复 boot 分区: `dd if=/tmp/boot.img of=/dev/mmcblk1p62 bs=4M` (23355392 bytes OK)
+5. 清除 misc BCB (之前尝试设 "bootloader" 进 fastboot 未生效): `dd if=/dev/zero of=/dev/mmcblk1p42 bs=1 count=32`
+6. `reboot -f`
+
+**恢复验证**: SSH 可达, PID 1 = busybox ash (initramfs 模式), cmdline UUID 正确, WiFi/网络正常.
+
+### cpufreq 状态 (新 kernel 06-30 构建)
+
+| 项 | 状态 |
+|---|---|
+| kernel 版本 | 6.19.10-sdm660 #3 SMP PREEMPT Tue Jun 30 03:11:51 UTC 2026 |
+| DT cpufreq@179c0000 | **存在** (patch 0003 已应用, 在 soc@0 下) |
+| DT cprh 节点 | **不存在** (patch 0006 未应用到此 dtb, boot.img 早于 patch 0006) |
+| cpufreq policy | 不存在 (`/sys/devices/system/cpu/cpufreq/` 无) |
+| scaling_driver | 不存在 |
+| cpufreq-dt 驱动 | 失败: `cpu cpu0: cpufreq_init: failed to get clk: -2` (-2=ENOENT) |
+| cpufreq-hw 驱动 | modprobe 成功但 probe 失败: `cpu cpu0: power domain not found: 0` |
+| cpr3 模块 | modprobe 成功 (无 cprh DT 节点, 不 probe) |
+| 模块文件 | cpr3.ko.zst, cpr-common.ko.zst, cpr.ko.zst, qcom-cpufreq-hw.ko.zst 均在 /lib/modules/6.19.10-sdm660/ |
+
+**结论**: cpufreq 仍不工作. 根因: DT 无 cprh 节点 → 无 CPR power domain → cpufreq-hw probe 失败. cpufreq-dt 路径也失败 (找不到 CPU clk).
+
+### patch 0006 状态 (已创建但未启用)
+
+- 文件: `0006-cprh-dts-placeholder.patch` (06-30 12:31, 7048 bytes)
+- 内容: 添加 cprh DT 节点 (`power-controller@179c8000`, compatible `qcom,sdm630-cprh`) + 34 个 qfprom nvmem cells
+- **关键**: cprh 节点 `status="disabled"` (安全考虑)
+- 原因: nvmem cell 偏移从 MSM8998 复制, **未验证** SDM630 真实 qfprom fuse 布局. 启用会编程错误电压, 可能损坏 SoC
+- 已知差异: MSM8998 qusb2_hstx_trim @0x23a, SDM630 @0x243 (证明 qfprom 布局不同)
+
+### 下一步选项
+1. **重新构建 kernel** (应用 patch 0006) 并刷入验证 cprh 节点存在 (但 status=disabled, cpufreq 仍不工作)
+2. **研究 SDM630 CPR fuse 偏移** (高风险, 需对比原厂 dtbo / downstream 源码)
+3. **放弃 cpufreq** (当前优先级 7, 设备可长期运行无需调频)
+4. **其他外设工作** (如 GPU/显示, 但服务器场景不需要)

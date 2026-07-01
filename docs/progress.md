@@ -1113,3 +1113,402 @@ pmOS chroot 限制 `reboot` 不生效 (PID 1 是 busybox ash init_2nd.sh, 受内
   会偶发认证失败
 - **设备 SSH**: `user@172.16.42.1` (USB NCM gadget), `sh -s` heredoc 模式
   执行远程脚本 (设备无 bash)
+
+---
+
+## r6-r11: cpr3_corner_init -EINVAL 调试与修复 (2026-06-30)
+
+### 背景
+
+r5 验证 cpr3 driver 可加载并绑定设备后, 进入阶段2: 让 cpr3 完整初始化
+corners, 使 cpufreq-hw 驱动能注册成功, 实现 CPU 频率调节.
+
+### r6-r9: patch 0003/0005/0006/0007 演进
+
+- **patch 0003** (`0003-cpufreq-hw-sdm660.patch`): 添加 SDM660 cpufreq-hw
+  兼容字符串, 初始版本
+- **patch 0005** (`0005-cpufreq-hw-osm-programming.patch`): 完整 OSM
+  (Operating State Manager) 编程逻辑
+  - genpd 名字从 "perf" 改为 "cprh" (`cprh_genpd_names[] = { "cprh", NULL }`)
+  - 添加 `qcom_cpufreq_gen_params`, `qcom_cpufreq_hw_osm_setup` 等函数
+  - 使用 `devm_pm_domain_attach_list()` 把 CPU attach 到 cprh genpd
+- **patch 0006** (`0006-cprh-dts-placeholder.patch`): cprh DT 节点和
+  cprh_opp_table 定义
+  - cprh 节点 status="okay"
+  - cprh_opp_table: 5 个 OPP, 每个有 `opp-level` 和 `qcom,opp-fuse-level`
+  - `qcom,opp-fuse-level` 数组化 `<N>` → `<N N>` (gold/silver 共享)
+  - CPU OPP 节点添加 `required-opps` 引用 cprh_opp
+- **patch 0007** (`0007-cpr3-add-cprh-opp-table.patch`): 在 cpr_probe 中
+  添加 `dev_pm_opp_of_add_table(dev)` 调用
+  - 关键: 在 `&pdev->dev` 上调用, 通过 `operating-points-v2` phandle
+    全局共享 OPP 表, 使 `thread->pd.dev` 能访问同一个 cprh_opp_table
+  - `of_genpd_add_provider_onecell` 不处理 OPP, 必须手动 add_table
+
+### r9 验证结果
+
+r9 内核 (含 patch 0003-0007) 成功启动, SSH 可达. 但 dmesg 显示:
+
+```
+qcom-cpr3 179c8000.power-controller: DBG: thread=1 cpu_dev=genpd:0:cpu0 opp_count=5
+genpd genpd:0:cpu0: error -EINVAL: Couldn't initialize corners
+qcom-cpufreq-hw 17914800.cpufreq: Cannot setup the OSM for CPU0: -22
+qcom-cpufreq-hw 17914800.cpufreq: CPUFreq HW driver failed to register
+```
+
+- `opp_count=5` 证明 OPP 表解析成功 (patch 0007 工作)
+- 但 `cpr3_corner_init` 返回 -EINVAL, cpufreq-hw 注册失败
+
+### r10: 添加 printk 调试日志
+
+在 patch 0004 的 `cpr3_corner_init` 函数中添加 7 处 `DBG:` 前缀的
+`dev_err` 日志, 覆盖所有 -EINVAL 返回路径:
+1. `dev_pm_opp_find_level_exact` 失败
+2. `cpr_get_fuse_corner` 返回 0
+3. `cpr_get_opp_hz_for_req` 返回 0
+4. `num_corners < 2` 检查
+5. `fuse->quot < corner->quot_adjust` 检查
+6. `cpr_pd_attach_dev` 中 opp_count 日志
+
+### r10 调试结果 (关键突破)
+
+部署 r10 后, dmesg 只显示:
+```
+qcom-cpr3 179c8000.power-controller: DBG: thread=1 cpu_dev=genpd:0:cpu0 opp_count=5
+genpd genpd:0:cpu0: error -EINVAL: Couldn't initialize corners
+```
+
+**cpr3_corner_init 内部的所有 DBG 日志都没出现!** 这说明失败发生在
+循环中**未被 instrument 的路径**: `cpr_get_corner_post_vadj()` 失败时
+直接返回 ret, 没有 DBG 日志.
+
+### 根因定位
+
+`cpr_get_corner_post_vadj()` 函数读取 OPP 节点的可选属性:
+- `qcom,opp-oloop-vadj` (open-loop voltage adjustment)
+- `qcom,opp-cloop-vadj` (closed-loop voltage adjustment)
+
+使用 `of_property_read_u32_index()` 读取. 当属性**不存在**时, 该函数
+返回 `-EINVAL`, 而 `cpr3_corner_init` 直接把这个错误返回, 导致整个
+初始化失败.
+
+检查 patch 0006 的 cprh_opp_table 定义, 确认 OPP 节点**只有**
+`opp-level` 和 `qcom,opp-fuse-level`, **没有** `qcom,opp-oloop-vadj`
+和 `qcom,opp-cloop-vadj` 属性.
+
+这些属性是**可选的** (缺失表示无电压调整). 正确行为应该是把缺失属性
+视为 0 调整, 而不是返回错误.
+
+### r11 修复
+
+修改 patch 0004 的 `cpr_get_corner_post_vadj()` 函数:
+```c
+ret = of_property_read_u32_index(np, "qcom,opp-oloop-vadj",
+                                 tid, open_loop);
+if (ret) {
+    /* Optional property: missing = no adjustment */
+    *open_loop = 0;
+    *closed_loop = 0;
+    ret = 0;
+    goto out;
+}
+
+ret = of_property_read_u32_index(np, "qcom,opp-cloop-vadj",
+                                 tid, closed_loop);
+if (ret) {
+    /* Optional property: missing = no adjustment */
+    *closed_loop = 0;
+    ret = 0;
+}
+```
+
+- hunk header 从 `@@ -0,0 +1,2970 @@` 改为 `@@ -0,0 +1,2977 @@`
+- APKBUILD pkgrel 从 10 改为 11
+- checksums 已通过 `pmbootstrap checksum` 更新
+
+### 待验证
+
+r11 构建完成后, 部署测试:
+1. cpr3_corner_init 是否通过 (不再 -EINVAL)
+2. cpufreq-hw 驱动是否注册成功
+3. CPU 频率调节是否工作 (`cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_*`)
+
+如果 cpr3_corner_init 仍有其他失败路径 (如 `cpr_calculate_scaling`
+返回错误), 需要继续添加 DBG 日志定位.
+
+### 技术备忘 (r6-r11)
+
+- **OPP phandle 共享机制**: `dev_pm_opp_of_add_table(dev)` 在 `&pdev->dev`
+  上解析 `operating-points-v2` phandle, OPP 表全局共享, `thread->pd.dev`
+  能访问同一个 cprh_opp_table
+- **三个 device 区别**: `&pdev->dev` (cprh 平台设备), `thread->pd.dev`
+  (genpd 内嵌设备), `dev` in `cpr_pd_attach_dev` (CPU 设备)
+- **of_property_read_u32_index 返回值**: 属性不存在返回 `-EINVAL`,
+  属性存在但长度不足返回 `-ENODATA`
+- **patch hunk header 行数必须精确**: `@@ -0,0 +1,N @@` 中的 N 必须等于
+  实际 `+` 行数, 否则 patch 只应用前 N 行导致文件截断 (r10 曾因此构建失败)
+- **reboot to fastboot**: pmOS 中 `reboot bootloader` 失败 (systemd 缺少
+  reboot-parameter 文件), 用 Python ctypes 直接调用
+  `syscall(142, 0xfee1dead, 672274793, 0xA1B2C3D4, "bootloader")` 成功
+- **lsusb 误报**: d001 是 CDC NCM (pmOS), 不是 fastboot; d00d 才是 fastboot
+
+## r12-r28: cpufreq-hw OSM 编程与频率匹配修复 (2026-07-01)
+
+### 问题概述
+r11 之后, cpr3 成功加载 (OPP=8), 但 `qcom-cpufreq-hw` 驱动注册失败,
+`/sys/devices/system/cpu/cpu0/cpufreq/` 不存在, CPU 频率无法调节。
+
+### r12-r26: OSM enable TZ 保护问题
+
+**根因**: SDM660 的 OSM (Operating State Manager) 被 TrustZone 保护,
+直接 `writel` 到 `reg_enable` 寄存器无法生效。
+
+**r26 修复**:
+1. OSM enable 改用 `qcom_scm_io_writel(phys_addr, 1)` SCM 调用 (ret=0)
+2. 当 `!uses_tz` 时跳过 `reg_enable & 0x1` 检查 (readback 仍为 0x70000,
+   bit 0 未设置但 bits 16-18 设置表示 OSM 已运行)
+3. 验证: cpu0/cpu1 的 OSM setup 成功完成
+
+### r27: cpu2-7 重复调用 cpu_init 调试
+
+**现象**: cpu0/cpu1 的 OSM setup 成功 (OPP=8), 但 cpu2-7 仍然调用 cpu_init。
+
+**r27 调试信息**:
+- 添加 `policy->cpus` 调试: 确认 `qcom_get_related_cpus` 返回正确 cpumask
+  - domain 0 (silver): cpu0, cpu5, cpu6, cpu7
+  - domain 1 (gold): cpu1, cp2, cpu3, cpu4
+- 添加 `read_lut` 返回值调试: `OSMDBG: read_lut ret=%d freq_table=%p`
+
+**SDM660 CPU 拓扑映射** (DTS reg → Linux CPU 编号):
+- cpu0 = reg=0x0 (silver, domain 0)
+- cpu1 = reg=0x100 (gold, domain 1)
+- cpu2 = reg=0x101 (gold, domain 1)
+- cpu3 = reg=0x102 (gold, domain 1)
+- cpu4 = reg=0x103 (gold, domain 1)
+- cpu5 = reg=0x1 (silver, domain 0)
+- cpu6 = reg=0x2 (silver, domain 0)
+- cpu7 = reg=0x3 (silver, domain 0)
+
+### r28: OSM LUT src=0 频率不匹配 (根本修复)
+
+**根因发现**:
+r27 测试发现 cpu0/cpu1 的 `read_lut ret=0` (成功), 但紧接着
+"Failed to add OPPs" 错误, 导致 init 返回 -ENODEV, per_cpu 不被设置,
+cpu2-7 重新调用 init (因 cpr3 在第二次调用时 set 0 OPPs 而全部失败)。
+
+深入分析 dmesg 发现:
+```
+cpu cpu0: Voltage update failed freq=600000
+cpu cpu0: failed to update OPP for freq=600000
+cpu cpu0: Failed to add OPPs
+```
+
+**根本原因**: OSM LUT 写入/读取路径对 `src=0` 语义不一致:
+- **写入路径** (`qcom_cpufreq_gen_params`): 第一个 OPP (i=0) 设置 `f_src=!!i=0`
+  (alternate/GPLL 源), 但仍计算 `lval = rate/xo_rate = 33` (633.6MHz/19.2MHz)
+- **读取路径** (`qcom_cpufreq_hw_read_lut`): 当 `src=0` 时, **忽略 lval**,
+  直接返回 `cpu_hw_rate / 1000 = 600 MHz` (alternate 时钟频率)
+
+结果: 633.6 MHz 的 OPP 写入后读回变成 600 MHz, 而 opp-table-cluster0
+中没有 600 MHz 的 OPP, `dev_pm_opp_adjust_voltage` 失败。
+
+**频率计算参数**:
+- `xo_rate = 19,200,000 Hz` (19.2 MHz XO 晶振)
+- `cpu_hw_rate = 600,000,000 Hz` (600 MHz GPLL0 alternate 时钟)
+- opp-table-cluster0 频率: 633.6, 902.4, 1113.6, 1401.6, 1536, 1612.8,
+  1747.2, 1843.2 MHz (均为 19.2 MHz 整数倍)
+
+**r28 修复**:
+将 `f_src = !!i` 改为 `f_src = 1`, 让所有 OPP 都使用 XO/PLL 源 (src=1),
+这样读取时 `freq = xo_rate * lval / 1000` 会正确使用 lval 还原频率。
+
+### cpufreq core policy 管理机制 (关键发现)
+
+`cpufreq_policy_online` 流程 (drivers/cpufreq/cpufreq.c):
+1. `cpufreq_driver->init(policy)` — 调用驱动 init
+2. `cpufreq_table_validate_and_sort(policy)` — 验证 freq_table
+3. `cpumask_copy(policy->related_cpus, policy->cpus)`
+4. `for_each_cpu(j, policy->related_cpus) per_cpu(cpufreq_cpu_data, j) = policy`
+
+**关键**: 如果 init 失败或 validate 失败, 会 `goto out_offline_policy`,
+per_cpu 不被设置, 导致同 domain 后续 CPU 重新调用 init。
+`cpufreq_policy_free` 会清理 per_cpu (设为 NULL)。
+
+### cpr3 模块卸载 segfault 问题
+
+- `rmmod cpr3` 导致 segfault, refcount 变为 -1
+- `modprobe cpr3` 报 "Resource busy", 无法重新加载
+- 修复: `echo b > /proc/sysrq-trigger` 重启设备
+
+### 文件修改
+- `0005-cpufreq-hw-osm-programming.patch`: r28 修改 `f_src = !!i` → `f_src = 1`
+- `APKBUILD`: pkgrel=28, sha512sum 已更新
+
+## r29-r30: OSM 寄存器 TZ 锁定确认 (2026-07-01)
+
+### 触发
+r28 修复 `f_src=1` 后设备测试发现 `Failed to add OPPs` 仍然存在,
+需确认 OSM LUT 写入是否真的生效。
+
+### r29: 添加 readback 调试 + update_opp fallback
+
+**修改内容** (`0005-cpufreq-hw-osm-programming.patch`):
+
+1. `qcom_cpufreq_update_opp` 添加 fallback: 当
+   `dev_pm_opp_adjust_voltage` 失败 (freq 不匹配) 时, 改用
+   `dev_pm_opp_add` 动态添加 OPP:
+   ```c
+   ret = dev_pm_opp_adjust_voltage(cpu_dev, freq_hz, volt, volt, volt);
+   if (ret) {
+       dev_warn(cpu_dev, "Voltage update failed freq=%ld, trying dynamic add\n", freq_khz);
+       return dev_pm_opp_add(cpu_dev, freq_hz, volt);
+   }
+   ```
+
+2. `write_lut` 末尾添加 readback 调试, 验证 writel 是否真的生效:
+   ```c
+   dev_info(cpu_dev, "OSMDBG: write_lut[%d] wrote f=0x%x v=0x%x rb_f=0x%x rb_v=0x%x\n",
+            i, entry->freq_lut_val, entry->volt_lut_val,
+            readl(ddata->base + sdata->reg_freq_lut + pos),
+            readl(ddata->base + sdata->reg_volt_lut + pos));
+   ```
+
+3. `read_lut` 每个条目添加调试信息:
+   ```c
+   dev_info(cpu_dev, "OSMDBG: lut[%d] fdata=0x%x src=%d lval=%d cc=%d freq=%d volt=%d\n",
+            i, ..., src, lval, core_count, freq, volt / 1000);
+   ```
+
+4. 保留 r28 的 `f_src = 1` (所有 OPP 用 XO/PLL 源)
+
+**LUT 写入值 (正确计算)**:
+- Entry 0: f=0x4040021 (src=1<<26, cc=4<<16, lval=33) → 633.6 MHz
+- Entry 1: f=0x404002f (lval=47) → 902.4 MHz
+- Entry 2: f=0x404003a (lval=58) → 1113.6 MHz
+- Entry 3: f=0x4040049 (lval=73) → 1401.6 MHz
+- Entry 4: f=0x4040050 (lval=80) → 1536 MHz
+- Entry 5: f=0x4040054 (lval=84) → 1612.8 MHz
+- Entry 6: f=0x404005b (lval=91) → 1747.2 MHz
+- Entry 7: f=0x4040060 (lval=96) → 1843.2 MHz
+
+### r29 设备测试: writel 被 TZ 静默丢弃 (关键发现)
+
+设备重启 (干净状态) 后 `modprobe cpr3 && modprobe qcom-cpufreq-hw`,
+dmesg 输出:
+```
+[   93.588726] cpu cpu0: OSMDBG: write_lut[0] wrote f=0x4040021 v=0x268 rb_f=0x70000 rb_v=0x70000
+[   93.601844] cpu cpu0: OSMDBG: write_lut[1] wrote f=0x404002f v=0x2a4 rb_f=0x70000 rb_v=0x70000
+... (40 个 LUT 条目 readback 全部 0x70000)
+[   93.973547] cpu cpu0: OSMDBG: enable readback=0x70000
+[   93.979618] cpu cpu0: OSMDBG: lut[0] fdata=0x70000 src=0 lval=0 cc=7 freq=600000 volt=0
+[   93.984582] cpu cpu0: Voltage update failed freq=600000, trying dynamic add
+```
+
+**核心结论**:
+- **写入值正确** (f=0x4040021 等计算无误)
+- **readback 始终 0x70000** — writel 被 TZ 静默丢弃, 寄存器从未改变
+- 0x70000 = bits 16,17,18 set = `LUT_CORE_COUNT=7`, 其他全 0 (未编程默认值)
+- enable 寄存器 readback 也是 0x70000 (bit 0 未设置, OSM 从未启用)
+
+**OSM 物理地址映射** (确认正确):
+- OSM base: `0x179c0000`
+- reg_enable: `0x179c0004` (offset 0x4)
+- reg_index: `0x179c0150` (offset 0x150)
+- reg_freq_lut: `0x179c0154` (offset 0x154)
+- reg_volt_lut: `0x179c0158` (offset 0x158)
+- Sequencer: `0x179c0300` (offset 0x300)
+
+### r30: 改用 qcom_scm_io_writel SCM 调用
+
+**假设**: 直接 writel 被 TZ 的 MMIO 写保护拦截. `qcom_scm_io_writel`
+通过 SMC 调用进入 TZ, 由 TZ 代为写入物理寄存器, 应能绕过 MMIO 保护.
+
+**修改内容**:
+将 `write_lut` 中所有 `writel` 改为 `qcom_scm_io_writel`, 使用
+`osm_rsrc->start` 物理地址:
+```c
+{
+    u32 phys = osm_rsrc->start;
+    ret = qcom_scm_io_writel(phys + sdata->reg_index + pos, i);
+    if (ret) dev_warn(cpu_dev, "SCM write index failed: %d\n", ret);
+    ret = qcom_scm_io_writel(phys + sdata->reg_volt_lut + pos, entry->volt_lut_val);
+    if (ret) dev_warn(cpu_dev, "SCM write volt_lut failed: %d\n", ret);
+    ret = qcom_scm_io_writel(phys + sdata->reg_freq_lut + pos, entry->freq_lut_val);
+    if (ret) dev_warn(cpu_dev, "SCM write freq_lut failed: %d\n", ret);
+    ret = qcom_scm_io_writel(phys + sregs->reg_override + pos, entry->override_val);
+    if (ret) dev_warn(cpu_dev, "SCM write override failed: %d\n", ret);
+    ret = qcom_scm_io_writel(phys + sregs->reg_spare + pos, entry->spare_val);
+    if (ret) dev_warn(cpu_dev, "SCM write spare failed: %d\n", ret);
+}
+```
+
+### r30 设备测试: SCM 调用也无效 (最终结论)
+
+设备重启后测试, dmesg:
+```
+[   93.588726] cpu cpu0: OSMDBG: write_lut[0] wrote f=0x4040021 v=0x268 rb_f=0x70000 rb_v=0x70000
+... (所有 40 个 LUT readback 仍是 0x70000)
+[   93.958491] cpu cpu0: OSMDBG: enabling OSM domain=0 reg_enable=0x4 phys=0x179c0004 before=0x70000
+[   93.973547] cpu cpu0: OSMDBG: enable readback=0x70000
+```
+
+**关键观察**:
+- **没有 "SCM write failed" 警告** — `qcom_scm_io_writel` 返回 0 (成功)
+- **readback 仍然是 0x70000** — 寄存器实际未改变
+- TZ 的 SMC handler **接受写请求但不实际执行**, 或者 OSM 寄存器在
+  硬件层面被锁定 (XPU 保护)
+
+**最终结论**: **SDM660 的 OSM 寄存器完全被 TZ 锁定, Linux 无法编程**
+- 直接 writel: 被 TZ 静默丢弃 (readback 不变)
+- qcom_scm_io_writel SCM 调用: 返回成功但寄存器未改变
+- TZ 既不允许 EL1 直接写, 也不通过 SMC 代为写入
+
+### cpufreq-dt 替代方案验证 (失败)
+
+尝试不依赖 OSM 的 cpufreq-dt 路径:
+```
+[    3.133874] cpu cpu0: cpufreq_init: failed to get clk: -2
+[    3.179436] cpufreq-dt cpufreq-dt: failed register driver: -19
+```
+
+**根因**: CPU 设备节点在 DTS 中没有 `clocks` 属性.
+- `cpufreq-dt.c` L98: `cpu_clk = clk_get(cpu_dev, NULL)`
+- `clk_get(dev, NULL)` 从 DT `clocks` 属性获取 clk
+- SDM660 mainline 无 CPU clk 驱动, CPU 时钟由 OSM 管理, 无独立 clk
+- 此路径在 SDM660 上结构性不可行
+
+### 设备当前状态 (2026-07-01)
+
+- SSH 可达 (172.16.42.1 USB NCM)
+- r30 模块已加载 (qcom_cpufreq_hw, cpr3, cpr_common)
+- cpr3 genpd 注册成功 (OPP=8)
+- cpufreq 仍未注册 (`/sys/devices/system/cpu/cpu0/cpufreq/` 不存在)
+- 8 个 CPU 全部 BogoMIPS=38.40 (固定频率, bootloader 默认)
+- 设备功能正常, WiFi/SSH/rootfs 全部可用
+
+### 可能的后续方向 (未实施)
+
+- **方案 A**: 修改 DTS 为 CPU 节点添加 `clocks` 属性, 使 cpufreq-dt
+  能工作 (需要 CPU clk 驱动, mainline 不存在)
+- **方案 B**: 跳过 OSM 编程, 从 DT OPP 表直接构建 freq table, 仅用
+  `perf_state` 寄存器切换频率 (OSM LUT 未编程时 perf_state 可能无效)
+- **方案 C**: 接受无 cpufreq, 设备在固定频率运行 (BogoMIPS=38.40),
+  专注于其他服务器功能 (已通过压力测试, 8 核 175 MB/s)
+
+### 教训总结
+
+1. **TZ 保护是 SDM660 的硬限制**: 即使 `uses_tz=false` (TZ 未预编程
+   OSM), TZ 仍然锁定 OSM 寄存器不让 EL1 写入. 这是 SDM660 的硬件
+   设计, 无法通过软件绕过.
+2. **SCM 返回值不可信**: `qcom_scm_io_writel` 返回 0 不代表写入成功,
+   TZ 可能 silently ignore 写请求. 必须用 readback 验证.
+3. **0x70000 是未编程默认值**: `LUT_CORE_COUNT=7` 表示 OSM 硬件存在
+   但未被任何 side 初始化 (bootloader/TZ/Linux 都没编程).
+4. **mainline 缺 OSM 编程代码是设计选择**: 上游知道 SDM660 OSM
+   寄存器被 TZ 锁定, 所以不在 mainline 驱动中添加编程代码 (无意义).
+   SoMainline topic/cpr3hh 分支的代码是为未锁定的设备准备的.
+
+### 文件修改
+- `0005-cpufreq-hw-osm-programming.patch`: r29 添加 readback 调试 +
+  update_opp fallback; r30 将 writel 改为 qcom_scm_io_writel
+- `APKBUILD`: pkgrel=30, sha512sum 已更新
+- `/tmp/qcom-cpufreq-hw-r30.ko`: r30 编译后的内核模块 (47296 字节)

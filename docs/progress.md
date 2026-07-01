@@ -1606,3 +1606,29 @@ r30 观察到的 "readback=0x70000" 是读取 osm-domain 的未编程默认值.
    `devm_platform_ioremap_resource(pdev, i)` 按 index 映射, 顺序必须正确.
 3. **readback 验证是必要的**: r28-r30 的 readback 调试最终帮助定位了
    "写入被丢弃" 的真正原因 (写入地址错误, 而非 TZ 锁定).
+
+### cpufreq governor 配置 (schedutil)
+
+设备上配置了 schedutil governor, 模块自动加载 + governor 自动设置:
+
+1. **模块自动加载** (`/etc/modules-load.d/cpufreq.conf`):
+   ```
+   cpr3
+   qcom-cpufreq-hw
+   ```
+   cpr3 依赖 cpr-common, modprobe 会自动处理.
+
+2. **governor 自动设置** (`/etc/systemd/system/cpufreq-governor.service`):
+   ```ini
+   [Unit]
+   Description=Set cpufreq governor to schedutil
+   After=modules-load.service systemd-modules-load.service
+   [Service]
+   Type=oneshot
+   ExecStart=/bin/sh -c "for p in /sys/devices/system/cpu/cpufreq/policy*; do echo schedutil > $p/scaling_governor; done"
+   RemainAfterExit=yes
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+3. **验证**: schedutil 动态调频工作正常, CPU 负载时频率自动升降.

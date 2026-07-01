@@ -1,0 +1,8 @@
+[Unit]
+Description=Battery health monitor (long-term server use)
+After=local.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/battery-care.sh
+# No restart; timer triggers hourly

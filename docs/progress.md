@@ -1699,3 +1699,51 @@ dmesg: OSM 编程成功, CPR3 电压调整正常
 4. `losetup -d /dev/loopN` 清理
 
 未来应将此步骤集成到 `scripts/deploy.sh` 中.
+
+## boot 分区持久化 + 自动启动成功 (2026-07-02)
+
+### 自动启动实现
+
+修改 boot.img cmdline, 去掉 `pmos.debug-shell`, 添加稳定性参数:
+```
+plymouth.ignore-serial-consoles plymouth.prefer-fbcon loglevel=4 ignore_loglevel
+net.ifnames=0 earlycon console=ttyMSM0,115200 console=tty0 fbcon=nodefer
+consoleblank=60 cpuidle.off=1
+pmos_boot_uuid=604575a9-5b0e-47a9-b0b4-ef180b2caed6
+pmos_root_uuid=fe5c862d-7f65-4db4-8cdb-15c04b5243c5
+pmos_rootfsopts=defaults
+```
+
+**验证**: `fastboot boot boot-r31-auto.img` → 设备自动启动到 rootfs, SSH 可用, 无需手动 telnet.
+
+### boot 分区持久化: dd 写入成功!
+
+**问题**: `fastboot flash boot` 写入后 bootloader 无法启动 r31 内核 (原因不明, 可能是 AVB 或 sparse 格式问题).
+
+**解决方案**: 从设备内部用 `dd` 写入 boot 分区 (绕过 fastboot 协议):
+```bash
+# 在设备上执行 (SSH)
+sudo dd if=/tmp/boot-r31-auto.img of=/dev/disk/by-partlabel/boot bs=4M
+sync
+```
+
+**验证**: `sudo reboot` → 设备从 boot 分区启动 r31 内核 → rootfs 正常启动 → SSH 可用.
+
+**关键发现**:
+- `fastboot flash boot` 与 `dd` 写入的区别: fastboot 可能添加 AVB footer 或使用 sparse 格式, 导致 bootloader 无法识别
+- `dd` 直接写入原始 boot.img 内容, bootloader 能正确识别
+- boot 分区大小 64MB, r31 boot.img 22.7MB, 大小足够
+
+### 最终状态 (2026-07-02)
+
+设备现在可以**开机即 Linux**:
+1. 按电源键开机 → bootloader 从 boot 分区加载 r31 内核
+2. 内核自动启动 → initramfs → switch_root → rootfs
+3. rootfs 启动完成 → SSH 可用 (172.16.42.1:22)
+4. cpufreq 完全工作 (schedutil, 8 freqs per policy)
+5. 稳定性参数生效 (cpuidle.off=1, consoleblank=60)
+
+**不再需要**:
+- `fastboot boot` 临时启动 (已持久化到 boot 分区)
+- `pmos_continue_boot` 手动干预 (已去掉 pmos.debug-shell)
+- `cpufreq-setup.service` (模块自动加载, schedutil 是默认 governor)

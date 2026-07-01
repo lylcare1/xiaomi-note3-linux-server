@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/apk-update-check.timer
-# 来源: docs/troubleshooting.md §7.9.1 (P1-1 APK 自动更新通知)
+# 来源: docs/故障排查.md §7.9.1 (P1-1 APK 自动更新通知)
 # 频率: 24h
 
 [Unit]

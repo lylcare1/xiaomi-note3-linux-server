@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/fake-rtc-restore.sh
-# 来源: docs/troubleshooting.md §7.9.4 (P1-4 FakeRTC 恢复)
+# 来源: docs/故障排查.md §7.9.4 (P1-4 FakeRTC 恢复)
 # 触发: 开机时 fake-rtc-restore.service (ConditionPathExists=/var/lib/fake-rtc-time)
 # 功能: 若 NTP 60s 内未同步, 从 /var/lib/fake-rtc-time 恢复时间
 # 日志: logger -t fake-rtc-restore

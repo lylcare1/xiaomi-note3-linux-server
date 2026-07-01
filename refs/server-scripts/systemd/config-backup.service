@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/config-backup.service
-# 来源: docs/troubleshooting.md §7.10.1 (P2-1 配置自动备份)
+# 来源: docs/故障排查.md §7.10.1 (P2-1 配置自动备份)
 
 [Unit]
 Description=Backup key config files to /var/backups

@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/config-backup.timer
-# 来源: docs/troubleshooting.md §7.10.1 (P2-1 配置自动备份)
+# 来源: docs/故障排查.md §7.10.1 (P2-1 配置自动备份)
 # 频率: weekly Monday 03:00
 
 [Unit]

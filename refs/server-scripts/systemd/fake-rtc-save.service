@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/fake-rtc-save.service
-# 来源: docs/troubleshooting.md §7.9.4 (P1-4 FakeRTC 时间戳持久化)
+# 来源: docs/故障排查.md §7.9.4 (P1-4 FakeRTC 时间戳持久化)
 
 [Unit]
 Description=Save current timestamp to /var/lib/fake-rtc-time

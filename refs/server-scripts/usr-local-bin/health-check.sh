@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/health-check.sh
-# 来源: docs/troubleshooting.md §7.8.5 (P0-5 系统健康检查)
+# 来源: docs/故障排查.md §7.8.5 (P0-5 系统健康检查)
 # 频率: 5min (health-check.timer)
 # 功能: 检查 sshd/NM/wlan0/ath10k/网关, 连续 3 次失败 (15min) 自动 reboot
 # 日志: logger -t health-check

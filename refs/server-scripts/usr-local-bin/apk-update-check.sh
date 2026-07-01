@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/apk-update-check.sh
-# 来源: docs/troubleshooting.md §7.9.1 (P1-1 APK 自动更新通知)
+# 来源: docs/故障排查.md §7.9.1 (P1-1 APK 自动更新通知)
 # 频率: 24h (apk-update-check.timer)
 # 功能: 检查 apk 更新, 不自动升级, 安全包更新记 CRITICAL
 # 日志: logger -t apk-update-check

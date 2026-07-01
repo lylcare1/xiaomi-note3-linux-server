@@ -1,0 +1,10 @@
+# Artifact SHA256 checksums
+# 生成日期: 2026-06-28
+# 用 sha256sum 生成: sha256sum boot-nodebug.img xiaomi-jason.img > SHA256SUMS
+
+# TODO: 由 reproduce-from-scratch.sh 自动填充
+# 构建完成后执行:
+#   cd /tmp/jason-build
+#   sha256sum boot-nodebug.img xiaomi-jason.img > SHA256SUMS
+#   cp SHA256SUMS /home/lyl/Documents/system/XiaoMiNote3/artifacts/SHA256SUMS
+

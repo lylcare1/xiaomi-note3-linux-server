@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/health-check.service
-# 来源: docs/troubleshooting.md §7.8.5 (P0-5 系统健康检查)
+# 来源: docs/故障排查.md §7.8.5 (P0-5 系统健康检查)
 
 [Unit]
 Description=System health check (sshd/NM/wlan0/ath10k/gateway)

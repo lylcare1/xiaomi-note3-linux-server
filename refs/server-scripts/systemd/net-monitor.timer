@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/net-monitor.timer
-# 来源: docs/troubleshooting.md §7.10.2 (P2-2 网络监控告警)
+# 来源: docs/故障排查.md §7.10.2 (P2-2 网络监控告警)
 # 频率: 5min
 
 [Unit]

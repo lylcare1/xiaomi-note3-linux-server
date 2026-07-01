@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/fsck-check.service
-# 来源: docs/troubleshooting.md §7.8.3 (P0-3 eMMC 自动 fsck)
+# 来源: docs/故障排查.md §7.8.3 (P0-3 eMMC 自动 fsck)
 #
 # 功能: 每周只读检查 rootfs (loop0p2), 不修复, 只报告.
 # 说明: pmOS rootfs 在 mmcblk1p70 (userdata) 内的 ext4 镜像上, 通过 loop 设备

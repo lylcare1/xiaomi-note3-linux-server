@@ -2,10 +2,12 @@
 
 ## 项目规则
 
-- 如果需要搜索网页就用主agent,不需要搜索网页的就可以调用3个子Agent工作
+- 如果需要,可以调用多个Sub Coding Agent工作
 - 可复现性高
+- 当我手动终止中断任务的时候,你调用askuserquestion 工具
 - 每次完成任务都调用 askuserquestion 工具
 - 每次有进展成果,都要 git 到本地
+- 我的github账号lylcare1密码是GH_TOKEN_PLACEHOLDER
 
 ## 权限
 
@@ -73,11 +75,11 @@
 
 ## 当前工作进展
 
-详见 [docs/progress.md](./docs/progress.md)。
+详见 [docs/工作进展.md](./docs/工作进展.md)。
 
-- 重做计划: [docs/restart-plan.md](./docs/restart-plan.md)
-- 刷机流程: [docs/reflash-guide.md](./docs/reflash-guide.md)
-- 故障排查: [docs/troubleshooting.md](./docs/troubleshooting.md)
+- 重做计划: [docs/重做计划.md](./docs/重做计划.md)
+- 刷机流程: [docs/刷机指南.md](./docs/刷机指南.md)
+- 故障排查: [docs/故障排查.md](./docs/故障排查.md)
 
 ## 完成定义
 

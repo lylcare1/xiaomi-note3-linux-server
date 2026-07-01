@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/net-monitor.sh
-# 来源: docs/troubleshooting.md §7.10.2 (P2-2 网络监控告警)
+# 来源: docs/故障排查.md §7.10.2 (P2-2 网络监控告警)
 # 频率: 5min (net-monitor.timer)
 # 功能: 检查 wlan0/WiFi/网关/外网/DNS, 统计 rx/tx
 # 日志: logger -t net-monitor

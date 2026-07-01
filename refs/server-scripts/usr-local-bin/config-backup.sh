@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/config-backup.sh
-# 来源: docs/troubleshooting.md §7.10.1 (P2-1 配置自动备份)
+# 来源: docs/故障排查.md §7.10.1 (P2-1 配置自动备份)
 # 频率: weekly Monday (config-backup.timer)
 # 功能: tar.gz 备份关键配置到 /var/backups, 保留 28 天
 # 日志: logger -t config-backup

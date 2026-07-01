@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/temp-monitor.sh
-# 来源: docs/troubleshooting.md §7.9.2 (P1-2 温度监控告警)
+# 来源: docs/故障排查.md §7.9.2 (P1-2 温度监控告警)
 # 频率: 5min (temp-monitor.timer)
 # 功能: 扫描 12 个 thermal zone, 超阈值告警, 关键温度 sync
 # 日志: logger -t temp-monitor

@@ -159,7 +159,7 @@ refs/jason-pmaports-patches/
 
 ## 相关文档
 
-- `docs/research-deep.md` §10: 内核源码深挖验证 (panel driver, DTS 节点引用, zap shader)
-- `docs/troubleshooting.md` §7.4: WiFi firmware 修复 (whyred NON-HLOS.bin 替换)
-- `docs/reflash-guide.md`: 完整刷回原厂 / 重刷 pmOS 流程
+- `docs/深度调研.md` §10: 内核源码深挖验证 (panel driver, DTS 节点引用, zap shader)
+- `docs/故障排查.md` §7.4: WiFi firmware 修复 (whyred NON-HLOS.bin 替换)
+- `docs/刷机指南.md`: 完整刷回原厂 / 重刷 pmOS 流程
 - `refs/jason-dts/jason.dts`: 原始 DTS 参考文件 (作者 Kernel114514)

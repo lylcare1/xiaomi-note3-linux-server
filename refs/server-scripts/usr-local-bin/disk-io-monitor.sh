@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/disk-io-monitor.sh
-# 来源: docs/troubleshooting.md §7.10.3 (P2-3 disk I/O 统计)
+# 来源: docs/故障排查.md §7.10.3 (P2-3 disk I/O 统计)
 # 频率: 10min (disk-io-monitor.timer)
 # 功能: 从 /proc/diskstats 读 mmcblk1 (eMMC) 统计, 转 sectors -> MB, in_flight > 50 WARN
 # 日志: logger -t disk-io-monitor

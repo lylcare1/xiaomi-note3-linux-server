@@ -10,6 +10,8 @@ arch="aarch64"
 options="!check !archcheck"
 
 # soc-qcom-sdm660-rproc: 启用 modem/remoteproc, WiFi (ath10k_snoc) 依赖 modem 存活
+# usb-network-jason: USB NCM 网络配置 (固定接口名 usb0 + gadget 配置 + IP 监控),
+#   解决 udev 重命名接口导致 USB SSH 不通的问题 (见 docs/重做计划.md)
 depends="
 	firmware-xiaomi-jason
 	firmware-qcom-adreno-a530
@@ -19,6 +21,7 @@ depends="
 	postmarketos-base
 	soc-qcom-sdm660
 	soc-qcom-sdm660-rproc
+	usb-network-jason
 "
 
 makedepends="devicepkg-dev"
@@ -39,6 +42,6 @@ package() {
 
 sha512sums="
 df0d84e11be6fe2609881db3a4f83b8742adbf654b09d8c202673e607fe919c9b289edaaabddfccfc8a916878b27399b01c64c03a4101f7d82adf0d5047f3c81  deviceinfo
-bb45a945a5b87760dba0a8e1b995903677f30dc7cc55aa2a1b2b26efca698bb81e935b1cfd4a03072a80e7a0458597e6477f438b37845150da0571a915da9483  kernel-cmdline.conf
+6ca2e40f04d45ac91e788a46146e468f20c3d34f58a65d04335341439fbd5348c664d428775be26f3027456c205e99fe765e2430dd4cc7592e7fe43fcbbb8e20  kernel-cmdline.conf
 f48caeda44c430375a3d47a5a093f48a8bd56c9160d9537d9b4aa8880fc0b2f69dc3b6f0f202db714e3df4abc9ff234bde85aebfa38f206dbed617bda2dea93f  modules-initfs
 "

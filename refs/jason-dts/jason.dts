@@ -15,6 +15,12 @@
 / {
 	model = "Xiaomi Mi Note 3";
 	compatible = "xiaomi,jason", "qcom,sdm660";
+
+	/* Qualcomm UEFI ABL requires these downstream properties to accept kernel.
+	   Synced from 0001-dts-qcom-add-sdm660-xiaomi-jason.patch L51-53. */
+	qcom,msm-id = <0x13d 0x00>;
+	qcom,board-id = <0x1e 0x00>;
+	qcom,pmic-id = <0x1001b 0x101011a 0x00 0x00 0x1001b 0x201011a 0x00 0x00>;
 	chassis-type = "handset";
 
 	aliases {

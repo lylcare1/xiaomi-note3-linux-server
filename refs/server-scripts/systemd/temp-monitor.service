@@ -1,5 +1,5 @@
 # 对应设备 /etc/systemd/system/temp-monitor.service
-# 来源: docs/troubleshooting.md §7.9.2 (P1-2 温度监控告警)
+# 来源: docs/故障排查.md §7.9.2 (P1-2 温度监控告警)
 
 [Unit]
 Description=Temperature monitor (12 thermal zones)

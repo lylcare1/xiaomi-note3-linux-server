@@ -26,9 +26,9 @@
 #   ./scripts/reproduce-from-scratch.sh --no-flash # 只构建不刷入 (验证构建产物)
 #
 # 相关文档:
-#   - docs/device-state-manifest.md  设备状态清单 (目标状态)
-#   - docs/reflash-guide.md          刷机流程详解
-#   - docs/restart-plan.md          重做计划与背景
+#   - docs/设备状态清单.md  设备状态清单 (目标状态)
+#   - docs/刷机指南.md          刷机流程详解
+#   - docs/重做计划.md          重做计划与背景
 #   - refs/jason-pmaports-patches/  pmOS 包源改动
 
 set -eu
@@ -54,7 +54,7 @@ PATCH_SRC="$PROJECT_ROOT/refs/jason-pmaports-patches"
 # cmdline 修改脚本
 CMDLINE_MODIFIER="$SCRIPT_DIR/modify-bootimg-cmdline.py"
 
-# 关键 UUID (与 device-state-manifest.md 一致, 用于 rootfs 子分区)
+# 关键 UUID (与 设备状态清单.md 一致, 用于 rootfs 子分区)
 BOOT_UUID="c5f7e8ec-1086-4198-beb1-5f9f7e21920c"
 ROOT_UUID="c79928f5-46b8-49de-8203-6124d458c7ce"
 
@@ -167,7 +167,7 @@ if [ "$NO_FLASH" -eq 0 ]; then
     if [ ! -f "$NON_HLOS_WHYRED" ]; then
         echo "[ERROR] whyred NON-HLOS.bin 不存在: $NON_HLOS_WHYRED" >&2
         echo "        请先下载 whyred V12 fastboot 包并提取 NON-HLOS.bin" >&2
-        echo "        详见 docs/reflash-guide.md §2.3" >&2
+        echo "        详见 docs/刷机指南.md §2.3" >&2
         exit 1
     fi
     substep "NON-HLOS.bin: $NON_HLOS_WHYRED ($(du -h "$NON_HLOS_WHYRED" | cut -f1))"
@@ -449,7 +449,7 @@ else
     else
         echo "[ERROR] USB SSH 验证失败: $DEVICE_USB_IP 不可达" >&2
         echo "        请检查 USB 连接, 或通过 WiFi (192.168.1.12) 连接" >&2
-        echo "        故障排查见 docs/troubleshooting.md" >&2
+        echo "        故障排查见 docs/故障排查.md" >&2
         exit 1
     fi
 fi
@@ -507,4 +507,4 @@ echo "  - 长稳测试:       ./scripts/long-stability-test.sh"
 echo
 echo "回退到原厂 Android:"
 echo "  cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn && ./flash_all.sh"
-echo "  详见 docs/reflash-guide.md §1"
+echo "  详见 docs/刷机指南.md §1"

@@ -1,6 +1,6 @@
 #!/bin/sh
 # 对应设备 /etc/profile.d/motd-status.sh
-# 来源: docs/troubleshooting.md §7.10.4 (P2-4 motd 系统状态展示)
+# 来源: docs/故障排查.md §7.10.4 (P2-4 motd 系统状态展示)
 # 触发: 交互式 shell 启动时由 /etc/profile source
 #
 # 显示内容:

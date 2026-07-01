@@ -65,6 +65,15 @@ wifi_ip=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet / {print $2}' | head -1
 # USB IP
 usb_ip=$(ip -4 addr show usb0 2>/dev/null | awk '/inet / {print $2}' | head -1)
 
+# Bluetooth (hci0)
+bt_state=$(hciconfig hci0 2>/dev/null | grep -o 'UP\|DOWN' | head -1)
+bt_addr=$(hciconfig hci0 2>/dev/null | grep -o 'BD Address: [0-9A-Fa-f:]*' | awk '{print $3}')
+if [ "$bt_state" = "UP" ]; then
+    bt_info="UP (${bt_addr:-N/A})"
+else
+    bt_info="${bt_state:-N/A}"
+fi
+
 # 最近 1 小时 journal 警告 (前 3 条)
 warnings=$(journalctl --since "1 hour ago" -p warning --no-pager -q 2>/dev/null | tail -3)
 
@@ -85,6 +94,7 @@ else
     echo "   WiFi : (not connected)  IP: ${wifi_ip:-N/A}"
 fi
 echo "   USB  : IP: ${usb_ip:-N/A}"
+echo "   BT   : $bt_info"
 echo ""
 if [ -n "$warnings" ]; then
     echo " Recent warnings (last 1h):"

@@ -34,6 +34,13 @@ FSCK_INTERVAL=604800
 
 logger -t "$LOG_TAG" "started (PID $$)"
 
+# Bring up Bluetooth (WCN3990 via UART, hci0)
+# Idempotent: safe to call on every daemon restart
+if [ -x /usr/local/bin/bt-start.sh ] && [ -d /sys/class/bluetooth ]; then
+    /usr/local/bin/bt-start.sh >/dev/null 2>&1 &
+    logger -t "$LOG_TAG" "bt-start.sh triggered in background"
+fi
+
 # 初始化: 首次启动后等 60s 再开始 (让 modem/wifi 稳定)
 sleep 60
 

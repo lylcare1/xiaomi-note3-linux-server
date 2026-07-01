@@ -268,6 +268,26 @@ echo "$LOG_PREFIX INFO: Module loader started in background (PID $!)" > /dev/kms
 ) &
 echo "$LOG_PREFIX INFO: WiFi starter started in background (PID $!)" > /dev/kmsg
 
+# === Start Bluetooth (WCN3990 via UART, hci0) ===
+# hci0 is created by btqca driver shortly after WiFi modules load
+# Needs dbus + bluetoothd from rootfs, runs in chroot context
+(
+    # Wait for hci0 to appear (QCA driver registers ~5s after WiFi modules)
+    for i in $(seq 1 60); do
+        [ -d /sys/class/bluetooth/hci0 ] && break
+        sleep 1
+    done
+    if [ ! -d /sys/class/bluetooth/hci0 ]; then
+        echo "$LOG_PREFIX WARN: hci0 not found after 60s, BT start skipped" > /dev/kmsg
+        exit 0
+    fi
+    sleep 2  # Let QCA firmware load complete
+    chroot /sysroot /usr/local/bin/bt-start.sh >/sysroot/var/log/bt-start.log 2>&1
+    BT_STATE=$(chroot /sysroot hciconfig hci0 2>/dev/null | grep -o 'UP\|DOWN' | head -1)
+    echo "$LOG_PREFIX INFO: bt-start done, hci0=${BT_STATE:-none}" > /dev/kmsg
+) &
+echo "$LOG_PREFIX INFO: Bluetooth starter in background (PID $!)" > /dev/kmsg
+
 # === Start interactive shell on tty1 (physical screen) ===
 # Gives user a usable terminal on the phone display
 (

@@ -1747,3 +1747,88 @@ sync
 - `fastboot boot` 临时启动 (已持久化到 boot 分区)
 - `pmos_continue_boot` 手动干预 (已去掉 pmos.debug-shell)
 - `cpufreq-setup.service` (模块自动加载, schedutil 是默认 governor)
+
+---
+
+## WiFi 连接 + 稳定性 + 性能对比 + CPU 频率测试 (2026-07-02)
+
+### 1. WiFi 连接验证 (Green Tree Inn)
+
+- 之前用的 ChinaNet-810 不在扫描范围内, 改用 Green Tree Inn (密码 4006998998)
+- `nmcli device wifi connect "Green Tree Inn" password "4006998998" ifname wlan0` 成功
+- IP: 192.168.66.165/21 (DHCP), 网关 192.168.64.1, 外网可达 (ping 8.8.8.8 ~200ms)
+- `connection.autoconnect: yes` 已设置
+- **重启后自动连接验证通过**: reboot 后 1 分钟内 USB SSH 可用, wlan0 自动连接 Green Tree Inn, IP 仍为 192.168.66.165
+
+### 2. 长稳运行测试
+
+- 脚本: `/tmp/long-stability-test.sh` (主机侧) + `/tmp/device-stability-monitor.sh` (设备侧后台)
+- 7 个采样全部正常 (用户手动中断, 视为通过)
+- 结果:
+  | 指标 | 范围 | 状态 |
+  |------|------|------|
+  | 温度 (CPU) | 40.3 - 42.9°C | 稳定, 无过热 |
+  | 负载 | 0.24 - 0.79 | 空闲 |
+  | 内存 | 228-245M / 3624M (6-7%) | 充裕 |
+  | cpufreq | schedutil 正常 | policy0/policy1 都工作 |
+  | WiFi | wlan0 up, 192.168.66.165 | 0 断线 |
+  | 网关 ping | 7/7 OK | 0 失败 |
+  | 外网 ping | 7/7 OK | 0 失败 |
+  | sshd + NetworkManager | active 7/7 | 0 失败 |
+
+### 3. 性能对比: Xiaomi Note 3 vs x86 云服务器 (116.62.69.18)
+
+**硬件对比**:
+| 项目 | Xiaomi Note 3 | x86 服务器 |
+|------|--------------|-----------|
+| CPU | 8 核 SDM660 (ARM) | 2 核 Intel Xeon Platinum |
+| 内存 | 3624M | 1608M |
+| 磁盘 | 49.3G eMMC (loop) | 40G 云盘 |
+| 网络 | WiFi | 云内网 |
+
+**Benchmark 结果**:
+| 测试 | Xiaomi Note 3 | x86 服务器 | 比值 (服务器/手机) |
+|------|--------------|-----------|---------------------|
+| CPU 单核 dd→null (500MB) | 1.4 GB/s | 5.9 GB/s | 4.2x |
+| CPU 单核 md5 (500MB) | 83 MB/s (6s) | 421 MB/s (1.19s) | 5.1x |
+| CPU 多核总吞吐 (N×md5) | 400 MB/s (8 并行) | 605 MB/s (2 并行) | 1.5x |
+| 内存带宽 (dd 2GB→null) | 1.5 GB/s | 6.7 GB/s | 4.5x |
+| 磁盘写 (200MB) | 401 MB/s | 612 MB/s (direct) | 1.5x |
+| 磁盘读 (200MB) | 1.5 GB/s (loop 缓存不可靠) | 164 MB/s (direct) | N/A |
+| 网络延迟 (ping 8.8.8.8) | 201ms | 193ms | 相当 |
+
+**结论**: 手机单核约为 x86 1/5, 多核总吞吐约 2/3, 内存带宽 1/4.5, 磁盘写 2/3。适合轻量常驻服务, 不适合 CPU/内存密集计算。
+
+### 4. CPU 频率测试 (schedutil governor)
+
+**CPU 拓扑** (注意: 非连续编号):
+- policy0 (little A53): cpu0, cpu5, cpu6, cpu7 — 频率 633600 - 1843200 (8 档)
+- policy1 (big A73): cpu1, cpu2, cpu3, cpu4 — 频率 1113600 - 2457600 (8 档)
+- driver: `qcom-cpufreq-hw`, governor: `schedutil`
+
+**负载测试**:
+| 场景 | p0 (little) | p1 (big) | 说明 |
+|------|-------------|----------|------|
+| 空闲 (load 0.25) | 633M-1843M 波动 | 1113M 锁最低 | big 核深度休眠 |
+| 单核负载 (load 0.4-0.5) | 1401M-1843M | 1113M-2457M 动态 | schedutil 按需调频 |
+| 全核负载 (8×dd, 15s) | **1843M 锁定最高** | **2457M 锁定最高** | 立即满频, 无节流 |
+
+**温度**: 全核满载 15s, 温度 43.8→52.2°C (升 8.4°C), 远低于 85°C 保护阈值
+
+**结论**: cpufreq 完全工作, schedutil 响应极快 (第 1 秒即锁定最高频), 8 档频率点全部可用, 满载时无降频。
+
+### 5. GPU/VPU 服务器适用性分析
+
+**GPU (Adreno 512)**:
+- 驱动已加载 (msm + adreno), devfreq simple_ondemand, 0 transitions (从未升频)
+- firmware 加载失败 (a530_pm4.fw 命名不匹配, 应为 a512)
+- **服务器场景无用**: 无头不需要图形, mainline 不支持 Adreno GPGPU
+
+**VPU (Venus 视频解码)**:
+- `/dev/video*` 不存在, 驱动未加载
+- **当前不可用**, 理论上可用于视频硬解 (需额外配置驱动 + firmware)
+
+### 6. 文档
+
+- 创建 `docs/usage.md` (212 行, 简约使用文档)
+- Git commit: `3e4b02f docs: add concise usage guide for Xiaomi Note 3 Linux server`

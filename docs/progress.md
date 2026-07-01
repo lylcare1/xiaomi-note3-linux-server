@@ -1512,3 +1512,97 @@ dmesg 输出:
   update_opp fallback; r30 将 writel 改为 qcom_scm_io_writel
 - `APKBUILD`: pkgrel=30, sha512sum 已更新
 - `/tmp/qcom-cpufreq-hw-r30.ko`: r30 编译后的内核模块 (47296 字节)
+
+## r31: cpufreq 修复成功！OSM 编程生效 (2026-07-01)
+
+### r30 失败的真正根因
+
+r30 结论 "TZ 锁定 OSM 寄存器" 是**错误的**. 真正根因是 DTS reg 顺序问题:
+
+**mainline `qcom_cpufreq_hw_driver_probe`** 使用 `devm_platform_ioremap_resource(pdev, i)`
+按 **INDEX** (非 byname) 映射资源:
+```c
+for (i = 0; i < num_domains; i++) {
+    base = devm_platform_ioremap_resource(pdev, i);  // 按 INDEX!
+    data->base = base;
+}
+```
+
+r30 DTS reg 顺序: osm-domain0, osm-domain1, osm-acd0, osm-acd1, freq-domain0, freq-domain1
+→ `data[0].base = osm-domain0 (0x179c0000)` — **TZ-locked!**
+→ `data[1].base = osm-domain1 (0x179c2000)` — **TZ-locked!**
+
+所有 LUT/enable/setup 读写都发到 osm-domain (TZ-locked), 写入被静默丢弃.
+r30 观察到的 "readback=0x70000" 是读取 osm-domain 的未编程默认值.
+
+### OSM 寄存器区域划分 (关键发现)
+
+| 区域 | 地址 | 大小 | TZ 锁定 | 用途 |
+|---|---|---|---|---|
+| osm-domain0 | 0x179c0000 | 0x1000 | **是** (LUT 区域) | OSM 编程域 (LUT, enable) |
+| freq-domain0 | 0x179c1000 | 0x1000 | **否** | 频率 LUT 域 (可直接 writel) |
+| osm-domain0 sequencer | 0x179c0300 | - | **否** | sequencer 区域 (offset 0x300) |
+| osm-domain1 | 0x179c2000 | 0x1000 | **是** (LUT 区域) | OSM 编程域 |
+| freq-domain1 | 0x179c3000 | 0x1000 | **否** | 频率 LUT 域 |
+
+**关键**: freq-domain (0x179c1000/0x179c3000) 和 osm-domain sequencer (offset 0x300)
+都**未被 TZ 锁定**, 可直接 writel. 只有 osm-domain 的 LUT 区域被锁定.
+
+### r31 三层修复
+
+1. **DTS reg 重排** (patch 0003): 将 freq-domain0, freq-domain1 放到 reg 属性最前面,
+   使 `devm_platform_ioremap_resource(pdev, 0/1)` 映射到 freq-domain (NOT TZ-locked).
+   `platform_get_resource_byname` 仍能按名找到 osm-domain 用于 sequencer ioremap.
+
+2. **LUT 写入** (patch 0005, 沿用 r28): `writel(val, ddata->base + offset)` 直接写入
+   freq-domain (NOT TZ-locked), 写入生效.
+
+3. **Sequencer + Enable** (patch 0005, r31 新改):
+   - r28 用 `qcom_scm_io_writel` 写 sequencer/enable → 发到 osm-domain LUT 区域 (TZ-locked, 无效)
+   - r30 将 LUT 也改为 SCM → 同样无效
+   - r31: ioremap osm-domain, 直接 `writel` 写 sequencer (offset 0x300, NOT TZ-locked)
+     和 enable 寄存器 (freq-domain base + reg_enable, NOT TZ-locked)
+
+### r31 设备测试: 完全成功！
+
+```
+[  266.906329] cpu cpu0: OSMDBG: cpu_init cpu=0 index=0 cpus=0,5-7 count=4
+[  266.906413] cpu cpu0: OSMDBG: setup start domain=0 base=ffff800080e01000
+[  266.912136] cpu cpu0: OSMDBG: write_lut index=0 seq_addr=ffff8000816ae300 cpu_count=4
+[  267.065672] cpu cpu0: OSMDBG: gen_params ok num_entries=8 apm_vc=7 acc_vc=255
+[  267.167063] cpu cpu0: OSMDBG: write_lut done, starting reg programming
+[  267.174857] cpu cpu0: OSMDBG: enabling OSM domain=0 base=ffff800080e01000 reg_enable=0x4 before=0x0
+[  267.174887] cpu cpu0: OSMDBG: enable readback=0x1   ← OSM 已启用！
+[  267.175118] cpu cpu0: OSMDBG: read_lut ret=0 freq_table=000000009d9aac8e
+[  267.693798] cpu cpu1: OSMDBG: enabling OSM domain=1 base=ffff800080be5000 reg_enable=0x4 before=0x0
+[  267.855736] cpu cpu1: OSMDBG: enable readback=0x1   ← OSM 已启用！
+```
+
+**cpufreq 验证结果**:
+- 驱动: `qcom-cpufreq-hw`
+- policy0 (cpus 0,5,6,7): 633600 902400 1113600 1401600 1536000 1612800 1747200 1843200 (PWRCL/Silver, max 1843 MHz)
+- policy1 (cpus 1,2,3,4): 1113600 1401600 1747200 1804800 1958400 2150400 2208000 2457600 (PERFCL/Gold, max 2457 MHz)
+- **频率设置测试** (userspace governor):
+  - `echo 902400 > scaling_setspeed` → cur_freq=902400 ✅
+  - `echo 633600 > scaling_setspeed` → cur_freq=633600 ✅
+- 8 个 CPU 全部有独立频率读数, OSM 硬件实际切换频率
+
+### 警告 (非阻塞)
+
+- `cpufreq-dt: failed register driver: -19` (-ENODEV): 预期行为, qcom-cpufreq-hw 优先
+- `cpufreq_init: failed to get clk: -2`: cpufreq-dt 探测失败, 不影响 qcom-cpufreq-hw
+- `WARNING: drivers/opp/core.c:2567`: OPP 配置警告, 不影响功能
+
+### 文件修改
+- `0003-cpufreq-hw-sdm660.patch`: DTS reg 重排 (freq-domain 放前面)
+- `0005-cpufreq-hw-osm-programming.patch`: r31 重新生成, sequencer/enable 改为直接 writel + ioremap
+- `APKBUILD`: pkgrel=31, sha512sum 已更新
+
+### 教训纠正
+
+1. **r30 "TZ 锁定" 结论是错误的**: TZ 只锁定 osm-domain 的 LUT 区域,
+   不锁定 freq-domain 和 sequencer 区域.
+2. **mainline 按 index 映射 reg 是陷阱**: 当 DTS 有多个 reg 时,
+   `devm_platform_ioremap_resource(pdev, i)` 按 index 映射, 顺序必须正确.
+3. **readback 验证是必要的**: r28-r30 的 readback 调试最终帮助定位了
+   "写入被丢弃" 的真正原因 (写入地址错误, 而非 TZ 锁定).

@@ -1632,3 +1632,70 @@ r30 观察到的 "readback=0x70000" 是读取 osm-domain 的未编程默认值.
    ```
 
 3. **验证**: schedutil 动态调频工作正常, CPU 负载时频率自动升降.
+
+## r31 部署修复: UUID 不匹配是崩溃根因 (2026-07-02)
+
+### 关键纠错: "cpufreq 模块自动加载导致崩溃" 是误诊
+
+之前认为 `/etc/modules-load.d/cpufreq.conf` 在早期 boot 阶段加载 cpr3 + qcom-cpufreq-hw
+会导致设备崩溃. 实际上这只是巧合, **真正根因是 boot.img cmdline 中 UUID 不匹配**.
+
+### 真正根因: boot.img cmdline UUID 不匹配
+
+**现象**: `fastboot boot boot-r31.img` → initramfs debug shell → `pmos_continue_boot`
+→ rootfs 启动时 USB 完全断开 (设备崩溃).
+
+**诊断过程**:
+1. 禁用 cpufreq-setup.service, 重新刷入 rootfs → 仍然崩溃 (排除 cpufreq 服务)
+2. 通过 telnet (port 23) 进入 initramfs debug shell
+3. 手动 `losetup -Pf /dev/mmcblk1p70` → `blkid /dev/loop0p1 /dev/loop0p2`
+4. 发现实际 UUID:
+   - boot (loop0p1): `604575a9-5b0e-47a9-b0b4-ef180b2caed6`
+   - root (loop0p2): `fe5c862d-7f65-4db4-8cdb-15c04b5243c5`
+5. boot.img cmdline 中的 UUID:
+   - `pmos_boot_uuid=c3111c1f-5df3-4143-8005-7bc8abcb12c0` ❌ 不匹配
+   - `pmos_root_uuid=55b176e9-7dba-4871-87cb-68314c590292` ❌ 不匹配
+
+**根因**: 每次 `pmbootstrap install` 会重新生成 rootfs 镜像, UUID 会变化.
+但 boot.img 的 cmdline 没有同步更新, 导致 initramfs 无法按 UUID 找到 rootfs.
+
+### 修复方法
+
+用 `scripts/modify-bootimg-cmdline.py` 修改 boot.img 的 cmdline:
+```bash
+python3 scripts/modify-bootimg-cmdline.py /tmp/boot-r31.img /tmp/boot-r31-fixed-uuid.img \
+  "plymouth.ignore-serial-consoles plymouth.prefer-fbcon loglevel=8 ignore_loglevel \
+   net.ifnames=0 earlycon console=ttyMSM0,115200 pmos.debug-shell \
+   pmos_boot_uuid=604575a9-5b0e-47a9-b0b4-ef180b2caed6 \
+   pmos_root_uuid=fe5c862d-7f65-4db4-8cdb-15c04b5243c5 \
+   pmos_rootfsopts=defaults"
+```
+
+### 验证结果: 完全成功!
+
+`fastboot boot /tmp/boot-r31-fixed-uuid.img` → debug shell → `pmos_continue_boot`
+→ rootfs 正常启动 → SSH 可用 (port 22 OPEN).
+
+**cpufreq 状态** (无需 cpufreq-setup.service, 模块自动加载):
+```
+policy0 (cpus 0,5,6,7): schedutil, 633600-1843200 (8 freqs, PWRCL/Silver)
+policy1 (cpus 1,2,3,4): schedutil, 1113600-2457600 (8 freqs, PERFCL/Gold)
+模块: cpr3 + cpr_common + qcom_cpufreq_hw (自动加载)
+dmesg: OSM 编程成功, CPR3 电压调整正常
+```
+
+### 重要发现: cpufreq-setup.service 不是必需的
+
+- cpr3 + qcom_cpufreq_hw 模块在 rootfs 启动时**自动加载** (通过 udev 或内核机制)
+- schedutil governor 是**默认 governor**, 无需手动设置
+- cpufreq-setup.service 和 modules-load.d/cpufreq.conf 都可以删除
+
+### 待解决: boot.img UUID 持久化
+
+每次 `pmbootstrap install` 后需要:
+1. `losetup -Pf --show xiaomi-jason.img` 获取 loop 设备
+2. `blkid /dev/loopNp1 /dev/loopNp2` 获取实际 UUID
+3. 用 `modify-bootimg-cmdline.py` 更新 boot.img 的 cmdline UUID
+4. `losetup -d /dev/loopN` 清理
+
+未来应将此步骤集成到 `scripts/deploy.sh` 中.

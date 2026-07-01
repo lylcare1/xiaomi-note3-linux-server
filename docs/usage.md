@@ -22,11 +22,11 @@
 用数据线连接手机与电脑，开机后自动枚举 USB NCM 网卡。
 
 ```bash
-ssh user@172.16.42.1        # 密码: 1234
+ssh user@172.16.42.1        # 密码: DEVICE_PASS_PLACEHOLDER
 ```
 
 - IP: `172.16.42.1/16`
-- 用户: `user` (密码 `1234`)
+- 用户: `user` (密码 `DEVICE_PASS_PLACEHOLDER`)
 - root: `sudo -S` (用 user 密码)
 
 ### WiFi（局域网）

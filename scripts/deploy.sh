@@ -39,7 +39,7 @@ BOOT_IMG_AUTO="/tmp/boot-r31-auto.img"
 MODIFY_CMDLINE="$PROJECT_DIR/scripts/modify-bootimg-cmdline.py"
 DEV_IP="172.16.42.1"
 SSH_USER="user"
-SSH_PASS="1234"
+SSH_PASS="DEVICE_PASS_PLACEHOLDER"
 
 # Cmdline template (no pmos.debug-shell, with stability params)
 CMDLINE_BASE="plymouth.ignore-serial-consoles plymouth.prefer-fbcon loglevel=4 ignore_loglevel net.ifnames=0 earlycon console=ttyMSM0,115200 console=tty0 fbcon=nodefer consoleblank=60 cpuidle.off=1"

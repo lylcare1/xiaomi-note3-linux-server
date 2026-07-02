@@ -1,0 +1,45 @@
+--- a/drivers/power/reset/msm-poweroff.c
++++ b/drivers/power/reset/msm-poweroff.c
+@@ -12,11 +12,33 @@
+ #include <linux/module.h>
+ #include <linux/reboot.h>
+ #include <linux/pm.h>
++#include <linux/arm-smccc.h>
+
+ static void __iomem *msm_ps_hold;
+
++static int do_msm_restart(struct sys_off_data *data)
++{
++	writel(0, msm_ps_hold);
++	mdelay(10000);
++
++	return NOTIFY_DONE;
++}
++
+ static int do_msm_poweroff(struct sys_off_data *data)
+ {
++	struct arm_smccc_res res;
++
++	/* Direct PSCI SYSTEM_OFF SMC call (function ID 0x84000008).
++	 * On SDM660, the kernel's PSCI subsystem may not call SYSTEM_OFF
++	 * correctly due to firmware bugs. Make the SMC directly to bypass
++	 * the PSCI subsystem and talk to the secure monitor.
++	 */
++	arm_smccc_smc(0x84000008, 0, 0, 0, 0, 0, 0, 0, &res);
++
++	/* If we reach here, PSCI SYSTEM_OFF didn't power off the device.
++	 * Fall back to PS_HOLD write (triggers reset on TZ-protected SoCs,
++	 * but it's the only remaining option).
++	 */
+ 	writel(0, msm_ps_hold);
+ 	mdelay(10000);
+
+@@ -30,7 +52,7 @@
+ 		return PTR_ERR(msm_ps_hold);
+
+ 	devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_RESTART,
+-				      128, do_msm_poweroff, NULL);
++				      128, do_msm_restart, NULL);
+
+ 	devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_POWER_OFF,
+ 				      SYS_OFF_PRIO_DEFAULT, do_msm_poweroff,

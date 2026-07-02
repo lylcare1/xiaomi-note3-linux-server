@@ -2,6 +2,7 @@
 # 对应设备 /usr/local/bin/health-check.sh
 # 来源: docs/故障排查.md §7.8.5 (P0-5 系统健康检查)
 # 修订: r2 (2026-07-02) - 区分软/硬故障, 避免 WiFi 弱信号场景 bootloop
+# 修订: r3 (2026-07-02) - WiFi radio 手动关闭时跳过 wlan0/网关检查
 # 频率: 5min (health-check.timer)
 # 日志: logger -t health-check
 #
@@ -11,6 +12,11 @@
 #     - WiFi 信号弱/关联慢是正常波动, 不应快速 reboot
 #     - 软故障不 restart NM (避免打断 NM 的关联重试节奏)
 #     - 给 NM 60min 自行恢复窗口, 仍持续故障才 reboot
+#
+# WiFi radio off 处理 (r3):
+#   用户主动关闭 WiFi (nmcli radio wifi off) 时, wlan0 必然 down 且无网关
+#   这是用户意图, 不是故障, 跳过 wlan0/网关检查, 直接 check_ok
+#   这样可以在 WiFi 关闭状态下安全启用 health-check.timer
 #
 # 历史教训 (r1 -> r2):
 #   r1 把 wlan0 down 当硬故障 + 5s 内 restart NM, 背包弱信号场景
@@ -89,6 +95,15 @@ if ! systemctl is-active --quiet NetworkManager 2>/dev/null; then
 fi
 
 # 3. wlan0 接口 up? (软故障 - 信号弱/关联慢是正常的, 不 restart NM)
+#    但若 WiFi radio 被手动关闭 (r3), 跳过 wlan0/网关检查
+wifi_radio=$(nmcli radio wifi 2>/dev/null)
+if [ "$wifi_radio" = "disabled" ]; then
+    # WiFi 被用户主动关闭, 不算故障, 跳过 WiFi 相关检查
+    logger -t "$TAG" "WiFi radio off (user disabled), skipping wlan0/gateway checks"
+    check_ok
+    exit 0
+fi
+
 if ! ip link show wlan0 2>/dev/null | grep -q "state UP"; then
     soft_fail "wlan0 down (WiFi not associated, NM will retry)"
     exit 1

@@ -1,98 +1,115 @@
 #!/bin/sh
 # 对应设备 /usr/local/bin/health-check.sh
 # 来源: docs/故障排查.md §7.8.5 (P0-5 系统健康检查)
+# 修订: r2 (2026-07-02) - 区分软/硬故障, 避免 WiFi 弱信号场景 bootloop
 # 频率: 5min (health-check.timer)
-# 功能: 检查 sshd/NM/wlan0/ath10k/网关, 连续 3 次失败 (15min) 自动 reboot
 # 日志: logger -t health-check
 #
-# 检查项:
-#   1. sshd 服务是否 active, 失败则 restart
-#   2. NetworkManager 服务是否 active, 失败则 restart
-#   3. wlan0 接口是否 up, 失败则 restart NetworkManager
-#   4. ath10k 是否 crash (检查 dmesg 最近 100 行)
-#   5. 默认网关是否可达 (ping 2 次, 超时 3s), 失败则 restart NetworkManager
+# 故障分级 (r2 关键改动):
+#   硬故障 (3 次 = 15min reboot): sshd/NM 服务崩溃, ath10k firmware crash
+#   软故障 (12 次 = 60min reboot): wlan0 down, 网关不可达
+#     - WiFi 信号弱/关联慢是正常波动, 不应快速 reboot
+#     - 软故障不 restart NM (避免打断 NM 的关联重试节奏)
+#     - 给 NM 60min 自行恢复窗口, 仍持续故障才 reboot
+#
+# 历史教训 (r1 -> r2):
+#   r1 把 wlan0 down 当硬故障 + 5s 内 restart NM, 背包弱信号场景
+#   NM 反复重启打断关联, 3 次 (15min) 必 reboot, 形成 bootloop
 
 TAG="health-check"
-FAIL_FILE="/run/health-check-failures"
-MAX_FAILURES=3
+HARD_FAIL_FILE="/run/health-check-hard-failures"
+SOFT_FAIL_FILE="/run/health-check-soft-failures"
+MAX_HARD_FAILURES=3    # 硬故障: 15min
+MAX_SOFT_FAILURES=12   # 软故障: 60min (给 WiFi 充分重试时间)
 
-failures=0
-[ -f "$FAIL_FILE" ] && failures=$(cat "$FAIL_FILE" 2>/dev/null)
-[ -z "$failures" ] && failures=0
+read_counter() {
+    [ -f "$1" ] && cat "$1" 2>/dev/null || echo 0
+}
 
-# 失败处理: 递增计数器, 达到阈值 reboot
-check_failed() {
-    failures=$((failures + 1))
-    echo "$failures" > "$FAIL_FILE"
-    logger -t "$TAG" "WARN check failed (failure $failures/$MAX_FAILURES): $1"
-    if [ "$failures" -ge "$MAX_FAILURES" ]; then
-        logger -t "$TAG" "CRITICAL $MAX_FAILURES consecutive failures, rebooting"
+hard_failures=$(read_counter "$HARD_FAIL_FILE")
+soft_failures=$(read_counter "$SOFT_FAIL_FILE")
+[ -z "$hard_failures" ] && hard_failures=0
+[ -z "$soft_failures" ] && soft_failures=0
+
+# 硬故障: 服务崩溃/驱动 crash, 快速 reboot
+hard_fail() {
+    hard_failures=$((hard_failures + 1))
+    echo "$hard_failures" > "$HARD_FAIL_FILE"
+    echo 0 > "$SOFT_FAIL_FILE"
+    logger -t "$TAG" "HARD fail ($hard_failures/$MAX_HARD_FAILURES): $1"
+    if [ "$hard_failures" -ge "$MAX_HARD_FAILURES" ]; then
+        logger -t "$TAG" "CRITICAL $MAX_HARD_FAILURES hard failures, rebooting"
         sync
         sleep 2
         reboot
     fi
 }
 
-# 成功处理: 计数器清零
+# 软故障: WiFi/网络波动, 不 restart NM, 缓慢 reboot
+soft_fail() {
+    soft_failures=$((soft_failures + 1))
+    echo "$soft_failures" > "$SOFT_FAIL_FILE"
+    echo 0 > "$HARD_FAIL_FILE"
+    logger -t "$TAG" "SOFT fail ($soft_failures/$MAX_SOFT_FAILURES): $1"
+    if [ "$soft_failures" -ge "$MAX_SOFT_FAILURES" ]; then
+        logger -t "$TAG" "WARNING $MAX_SOFT_FAILURES soft failures, rebooting to recover WiFi"
+        sync
+        sleep 2
+        reboot
+    fi
+}
+
+# 成功: 两个计数器都清零
 check_ok() {
-    echo 0 > "$FAIL_FILE"
+    echo 0 > "$HARD_FAIL_FILE"
+    echo 0 > "$SOFT_FAIL_FILE"
     logger -t "$TAG" "system healthy"
 }
 
-# 1. sshd 服务 active?
+# 1. sshd 服务 active? (硬故障)
 if ! systemctl is-active --quiet sshd 2>/dev/null; then
     logger -t "$TAG" "sshd not active, restarting"
     systemctl restart sshd
     sleep 2
     if ! systemctl is-active --quiet sshd 2>/dev/null; then
-        check_failed "sshd restart failed"
+        hard_fail "sshd restart failed"
         exit 1
     fi
 fi
 
-# 2. NetworkManager 服务 active?
+# 2. NetworkManager 服务 active? (硬故障)
 if ! systemctl is-active --quiet NetworkManager 2>/dev/null; then
     logger -t "$TAG" "NetworkManager not active, restarting"
     systemctl restart NetworkManager
     sleep 5
     if ! systemctl is-active --quiet NetworkManager 2>/dev/null; then
-        check_failed "NetworkManager restart failed"
+        hard_fail "NetworkManager restart failed"
         exit 1
     fi
 fi
 
-# 3. wlan0 接口 up?
+# 3. wlan0 接口 up? (软故障 - 信号弱/关联慢是正常的, 不 restart NM)
 if ! ip link show wlan0 2>/dev/null | grep -q "state UP"; then
-    logger -t "$TAG" "wlan0 down, restarting NetworkManager"
-    systemctl restart NetworkManager
-    sleep 5
-    if ! ip link show wlan0 2>/dev/null | grep -q "state UP"; then
-        check_failed "wlan0 still down after NM restart"
-        exit 1
-    fi
-fi
-
-# 4. ath10k 是否 crash (检查 dmesg 最近 100 行)
-if dmesg 2>/dev/null | tail -100 | grep -i "ath10k" | grep -iq "crash"; then
-    check_failed "ath10k firmware crash detected in dmesg"
+    soft_fail "wlan0 down (WiFi not associated, NM will retry)"
     exit 1
 fi
 
-# 5. 默认网关可达? (ping 2 次, 超时 3s)
+# 4. ath10k 是否 crash (检查 dmesg 最近 100 行) - 硬故障
+if dmesg 2>/dev/null | tail -100 | grep -i "ath10k" | grep -iq "crash"; then
+    hard_fail "ath10k firmware crash detected in dmesg"
+    exit 1
+fi
+
+# 5. 默认网关可达? (软故障 - 网络抖动是正常的, 不 restart NM)
 gw=$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')
 if [ -z "$gw" ]; then
-    check_failed "no default gateway"
+    soft_fail "no default gateway (WiFi not connected yet)"
     exit 1
 fi
 
 if ! ping -c 2 -W 3 "$gw" >/dev/null 2>&1; then
-    logger -t "$TAG" "gateway $gw unreachable, restarting NetworkManager"
-    systemctl restart NetworkManager
-    sleep 5
-    if ! ping -c 2 -W 3 "$gw" >/dev/null 2>&1; then
-        check_failed "gateway $gw still unreachable"
-        exit 1
-    fi
+    soft_fail "gateway $gw unreachable (network fluctuation)"
+    exit 1
 fi
 
 check_ok

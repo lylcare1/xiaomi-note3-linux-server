@@ -1,0 +1,6 @@
+[Unit]
+Description=Battery discharge monitor with low-power auto safe-poweroff
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/discharge-monitor.sh

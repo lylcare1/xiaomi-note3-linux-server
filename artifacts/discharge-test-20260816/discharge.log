@@ -1,0 +1,8 @@
+2026-08-16 21:50:17 cap=99% v=4358mV i=1uA est=4mW stat=Full load=0.38 0.20 0.19 t=45C
+2026-08-16 21:52:29 cap=99% v=4358mV i=1uA est=4mW stat=Full load=0.12 0.18 0.18 t=43C
+2026-08-16 21:54:47 cap=99% v=4358mV i=1uA est=4mW stat=Full load=0.11 0.15 0.17 t=42C
+2026-08-16 21:57:03 cap=99% v=4313mV i=-191uA est=823mW stat=Discharging load=0.15 0.13 0.16 t=42C
+2026-08-16 21:59:19 cap=99% v=4307mV i=-176uA est=758mW stat=Discharging load=0.11 0.13 0.16 t=41C
+2026-08-16 22:01:29 cap=99% v=4301mV i=-182uA est=782mW stat=Discharging load=0.02 0.09 0.14 t=41C
+2026-08-16 22:03:49 cap=99% v=4274mV i=-337uA est=1440mW stat=Discharging load=0.07 0.09 0.13 t=43C
+2026-08-16 22:05:55 cap=99% v=4289mV i=-207mA est=887mW stat=Discharging load=0.07 0.11 0.13 t=43C

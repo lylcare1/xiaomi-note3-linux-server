@@ -1,0 +1,2 @@
+2026-08-16 21:27:47 cap=99% v=4.360V t=33.3C health=Good status=Full chg=Full online=1
+2026-08-16 21:27:47 WARN: battery full but voltage=4.360V (>4.35). Stress on cells. Unplug USB.

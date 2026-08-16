@@ -25,7 +25,7 @@ LOAD=$(cut -d" " -f1-3 /proc/loadavg)
 MAXT=$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -1)
 [ -n "$MAXT" ] && MAXTC=$((MAXT / 1000)) || MAXTC="NA"
 
-echo "$TS cap=${CAP}% v=${MV}mV i=${MA}uA est=${MW}mW stat=${STAT} load=${LOAD} t=${MAXTC}C" >> "$LOG"
+echo "$TS cap=${CAP}% v=${MV}mV i=${MA}mA est=${MW}mW stat=${STAT} load=${LOAD} t=${MAXTC}C" >> "$LOG"
 tail -n 3000 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
 
 # 低电量保护: 自动软关机 (写 alert 供下次开机查看)

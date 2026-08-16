@@ -1,0 +1,6 @@
+[Unit]
+Description=Power consumption monitor (RRADC usbin)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/power-monitor.sh

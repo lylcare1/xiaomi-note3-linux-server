@@ -58,6 +58,24 @@ soft_fail() {
     echo 0 > "$HARD_FAIL_FILE"
     logger -t "$TAG" "SOFT fail ($soft_failures/$MAX_SOFT_FAILURES): $1"
     if [ "$soft_failures" -ge "$MAX_SOFT_FAILURES" ]; then
+        # r4 (2026-08-17): 到达阈值先判断是否值得/安全 reboot
+        # 教训: 2026-08-16 23:58 路由器被关闭 60min, 触发 12 次软故障 reboot,
+        #       误伤电池放电测试 (r3 只处理了设备侧 radio off, 没料到 AP 侧消失)
+        batt_stat=$(cat /sys/class/power_supply/qcom-battery/status 2>/dev/null)
+        if [ "$batt_stat" = "Discharging" ]; then
+            # 电池供电时不 reboot: reboot 只会更耗电, 且路由器关闭场景重启无济于事
+            echo 0 > "$SOFT_FAIL_FILE"
+            logger -t "$TAG" "soft failures reached but on battery, skip reboot (WiFi env offline?)"
+            exit 1
+        fi
+        # 有外部供电: 扫描确认 WiFi 环境是否有 AP 可连
+        if ! nmcli -t -f SSID dev wifi list --rescan yes 2>/dev/null | grep -q .; then
+            # 一个 AP 都看不到 = 环境离线 (路由器关了), 不是驱动卡死, 不重启
+            # (真驱动卡死通常伴随 ath10k crash -> 走硬故障路径, 不受此影响)
+            echo 0 > "$SOFT_FAIL_FILE"
+            logger -t "$TAG" "no WiFi APs visible, environment offline, skip reboot"
+            exit 1
+        fi
         logger -t "$TAG" "WARNING $MAX_SOFT_FAILURES soft failures, rebooting to recover WiFi"
         sync
         sleep 2

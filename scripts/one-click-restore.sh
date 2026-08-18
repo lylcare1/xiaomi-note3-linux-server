@@ -12,7 +12,7 @@ HOSTPASS='HOST_SUDO_PASS_PLACEHOLDER'
 DEV=user@172.16.42.1
 SSH="sshpass -p $PASS ssh -o ConnectTimeout=8 -o PreferredAuthentications=password -o PubkeyAuthentication=no $DEV"
 
-FS=full-system-20260818       # 全系统备份目录
+FS=full-system-20260818-v2   # 全系统备份目录 (v2 = r36 后基线, 权威)
 MODE=""
 
 log()  { echo "[$(date +%H:%M:%S)] $*"; }
@@ -47,19 +47,23 @@ mode_A() {
 }
 
 mode_A_full() {
-    log "=== A+: SSH 在线全量 rootfs 恢复 (full-system-20260818) ==="
+    log "=== A+: SSH 在线全量 rootfs 恢复 (full-system-20260818-v2, r36 基线) ==="
     [ -f backups/$FS/rootfs.tar.gz ] || die "缺 backups/$FS/rootfs.tar.gz"
-    log "解压 265MB 备份包..."
+    log "解压 268MB 备份包..."
     rm -rf /tmp/fs-restore && mkdir -p /tmp/fs-restore
     tar -xzf backups/$FS/rootfs.tar.gz -C /tmp/fs-restore || die "解压失败"
     log "推送到设备 (rsync over ssh, 可能数分钟)..."
-    sshpass -p $PASS rsync -az --delete \
+    # v2 tar 是 ./ 根打包 (busybox tar), 解压后直接在 /tmp/fs-restore 下, 无 rootfs/ 子目录
+    sshpass -p $PASS rsync -az \
       --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run --exclude=/tmp \
+      --exclude=/media --exclude=/mnt --exclude=/var/cache \
       -e "ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no" \
-      /tmp/fs-restore/rootfs/ $DEV:/ || die "rsync 失败"
+      /tmp/fs-restore/ $DEV:/ || die "rsync 失败"
     log "重启验证..."
     $SSH 'echo $PASS | sudo -S reboot'
     log "A+ 完成. 90s 后: $SSH 'uptime'"
+    log "恢复后自检: $SSH 'cat /sys/class/power_supply/pm660-charger/charge_behaviour'"
+    log "  预期含 [auto] inhibit-charge; 且 2min 内 journalctl -t charge-guard 有 inhibit 记录"
 }
 
 mode_B() {

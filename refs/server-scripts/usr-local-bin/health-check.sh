@@ -89,6 +89,9 @@ wifi_env_still_valid() {
 }
 
 # r6: ath10k 固件挂死自愈 — 重载驱动 (实测 8s 恢复, 不断 USB 网络)
+# r7 (2026-08-18): 重载后 wlan0 未回归 = QMI/remoteproc 深度卡死
+#       (dmesg: msa info req rejected: 90), 重载无效, 立即 reboot 兜底;
+#       教训: 20:09/20:14 两次重载均 error 90, 白等 30min+ 才走到 reboot
 # 成功条件: wlan0 down 且 (扫描失败 或 dmesg 最近有 ath10k crash)
 ath10k_selfheal() {
     if [ "$ath_reloads" -ge "$MAX_ATH10K_RELOADS" ]; then
@@ -101,6 +104,14 @@ ath10k_selfheal() {
     modprobe -r ath10k_snoc 2>/dev/null
     sleep 2
     modprobe ath10k_snoc 2>/dev/null
+    sleep 3
+    # r7: 重载后 wlan0 不存在 = 探测失败 (error 90 深卡死), 等 5min 也不会好, 直接 reboot
+    if ! ip link show wlan0 >/dev/null 2>&1; then
+        logger -t "$TAG" "ATH10K-RELOAD failed (wlan0 gone, qmi stuck), rebooting now"
+        sync
+        sleep 2
+        reboot
+    fi
     # 重载后 NM 会自动重新关联 (autoconnect), 下轮 (5min) 验证
     return 0
 }

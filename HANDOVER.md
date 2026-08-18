@@ -1,7 +1,7 @@
 # 项目交接文档 (Handover)
 
-> 生成日期: 2026-07-02 | 最后更新: 2026-08-18
-> 上一会话最后操作: **全系统备份 v2 入库** (r36 后基线, 备份资产索引已更新指向 v2); 无未完成的进行中任务
+> 生成日期: 2026-07-02 | 最后更新: 2026-08-18 21:45
+> 上一会话最后操作: **WiFi 固件崩溃调查（根因已锁定, 待执行修复）** — 详见 §7.8; 设备 WiFi 已临时屏蔽止住重启循环, USB 通道正常, charge-guard 正常
 > 项目根目录: `/home/lyl/Documents/system/XiaoMiNote3`
 
 ---
@@ -25,8 +25,8 @@
 ## 2. 设备当前状态
 
 ### 2.1 运行状态
-- **设备状态**: 运行中 (2026-08-18), SSH/WiFi/USB 均正常
-- **当前网络**: WiFi `LYL` (密码 `WIFI_LYL_PASS_PLACEHOLDER`) + USB NCM `172.16.42.1`
+- **设备状态**: 运行中 (2026-08-18 21:45), SSH/USB 正常; **WiFi 临时屏蔽中** (固件崩溃循环, 见 §7.8)
+- **当前网络**: USB NCM `172.16.42.1` (唯一通道); WiFi `泽川源科技` 已屏蔽待修复
 - **开机后**: 自动进入 Linux（boot 已持久化，无需 fastboot boot）
 
 ### 2.2 系统配置
@@ -42,7 +42,7 @@
 | init 系统 | systemd (PID 1 = systemd) |
 | USB 连接 | NCM gadget, 设备 IP `172.16.42.1/16` |
 | SSH 用户 | `user` (密码 `DEVICE_PASS_PLACEHOLDER`) |
-| WiFi | `LYL` (密码 `WIFI_LYL_PASS_PLACEHOLDER`), DHCP 分配 IP |
+| WiFi | `泽川源科技` 2.4G (密码 `WIFI_CHINANET_PASS_PLACEHOLDER`) — 2026-08-18 起路由器更换; 5G 版 ath10k 关联被拒, 只用 2.4G; **当前屏蔽中见 §7.8** |
 | 监控体系 | 11 个 systemd timer + 13 个脚本 (见 §5) |
 | 电池 | 2026-08-16 放电实测 12h55m (99→20%), 健康度 ~98% |
 | Bootloader | unlocked |
@@ -62,9 +62,9 @@ sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@172.16.42.1
 # 或配置 ~/.ssh/config.d/jason.conf 后: ssh jason
 ```
 
-### WiFi（局域网）
+### WiFi（局域网, 当前不可用 — 见 §7.8）
 ```bash
-sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@192.168.1.17   # IP 可能变, 先用 USB 查
+sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@192.168.0.93   # 修复后恢复; IP 可能变, 先用 USB 查
 ```
 
 ### Fastboot（维护模式）
@@ -278,6 +278,50 @@ python3 scripts/modify-bootimg-cmdline.py /tmp/postmarketOS-export/boot.img /tmp
 
 **遗留**: /tmp 下的 boot-r36 镜像重启本机会丢; 若需长期保留复制到 artifacts/
 
+### 7.8 WiFi 固件崩溃循环（WPA1/TKIP 触发）🔴 进行中 — 根因已锁定, 待修复验证
+
+**时间线**（2026-08-18 20:04 起）:
+- 20:04 换新路由器「泽川源科技」(2.4G ch1 + 5G ch36) 后, WCN3990 固件开始反复崩溃
+- 首轮处置: health-check r5→r6 (驱动重载自愈) → r7 (QMI error 90 深卡死时立即 reboot)
+- r7 生效后全链路自愈 11s (21:08:26 重载失败 → 21:08:36 reboot), 但**崩溃本身未止**, 当日累计 100+ 次
+
+**根因证据链**（已排除其他假设）:
+1. **崩溃模式**: 恢复后立即再崩, 精确 6s 周期循环 (21:10:37→43→49→55); 21:00:00 整点首次崩溃
+2. **AP 加密**: `nmcli dev wifi list` 显示两个 SSID 均为 **`WPA1 WPA2` 混合模式** → WPA1 IE = TKIP 兼容广播
+3. **固件版本无关已证**: modem 分区 wlanmdsp.mbn (md5 6d7a52cc, 2020-06 whyred 版) 与 6 月 29 日备份**逐字节一致**; rootfs ath10k 固件文件 v1/v2 备份 vs 当前也一致 → 固件从未变过, 是新环境触发老固件 bug
+4. **换路由器是唯一环境变量**: 旧路由器 ChinaNet-810 时代零崩溃; 同固件跑新 AP 首日即崩
+5. 充电改造 (r36/charge-guard) 与 WiFi 崩溃**无关** — 两套系统完全隔离, 固件 CRC 在充电改造前后一致
+
+**已知事实（固件调查结论）**:
+- jason 原厂 wlanmdsp (1.0.0.533) 与 mainline 驱动不兼容 (2026-06-28 实测, boot 后 350ms fatal), **不可回退**
+- whyred 最后版本 (MIUI 12.0.3.0 China 2021-05) wlanmdsp 仍为 2020-06 版 → whyred 系无更新固件
+- **lavender (红米 Note 7) = 同 SDM660 + 同 WCN3990, 官方支持至 MIUI 12.5 (2021-11)** → 潜在更新 wlanmdsp 来源
+- modem 分区 FAT 可 loop 挂载: `sudo mount -o ro,loop /dev/disk/by-partlabel/modem /mnt/modemro`
+
+**两条修复路径**:
+| 路径 | 操作 | 状态 |
+|---|---|---|
+| A. 改路由器加密 | 管理页把「WPA/WPA2 混合」改「WPA2-PSK(AES) only」 | 用户未确认是否可操作路由器 |
+| B. 换固件 | 下载 lavender fastboot ROM (2.4GB) → 提取 wlanmdsp.mbn → 刷 modem 分区 | 未开始 |
+
+**当前设备状态（待修复期间）**:
+- WiFi 已 `rfkill block wifi` 屏蔽, `泽川源科技` 连接 autoconnect=no
+- health-check.timer **已停** (`inactive`), 崩溃循环已止 (屏蔽后 0 新增)
+- USB NCM `172.16.42.1` 正常, charge-guard (60/40 磁滞) 正常运行
+
+**修复验证方法**（执行任一路径后）:
+```bash
+# 1. 解除屏蔽并重连
+sshpass -p "$DEVICE_PASS" ssh user@172.16.42.1 'echo DEVICE_PASS | sudo -S sh -c "
+  nmcli connection modify 泽川源科技 connection.autoconnect yes
+  rfkill unblock wifi
+  nmcli device wifi connect 泽川源科技 ifname wlan0"'
+# 2. 观察 30min 无新崩溃 = 根因确认
+journalctl -b 0 -k --no-pager | grep -c "firmware crashed"   # 计数不再增长
+# 3. 恢复监控
+systemctl start health-check.timer
+```
+
 ---
 
 ## 8. pmbootstrap 工作流
@@ -316,24 +360,30 @@ pmbootstrap export
 ## 9. 最近 git 历史
 
 ```
-76df8bf (HEAD -> main) charge-guard 硬件停充完成: 内核补丁0010 (r36) + charge_behaviour 属性 + r3 上线
-2970fb1 HANDOVER.md 全面更新到 2026-08-18: 一键还原 A-E 场景, 备份资产索引, §7.6 charge-guard 调查现状
-519accc one-click-restore.sh 一键还原 (A-E 场景自动检测); charge-guard r2 修复停充震荡偷充电 bug; 已实测路径 A
-d266e96 快速恢复指南: 新增 0.5 一键还原速查 (A-E 场景, 对接 2026-08-18 全系统备份)
-741ed95 修复原厂备份 sha256 清单(补全 15 个缺失条目, 28/28 校验通过)
-24a204f 全系统备份: rootfs tar+boot dd+boot 文件+分区元数据, 4 场景恢复文档
-1f28a2e charge-guard 磁滞充电控制 (60/40): status 属性可写发现+部署+全量备份+一键恢复脚本
+b9bed86 health-check r7: ath10k 重载后 wlan0 未回归(QMI error 90 深卡死)时立即 reboot, 避免白等 30min
+5caacd7 health-check r6: ath10k 固件挂死自愈 (rmmod+modprobe, 6次上限回落 reboot); 修正 r5 把驱动挂死误判为环境离线的缺陷
+052cf7a WiFi 路由器更换事故处置 + health-check r5 防重启循环
+5b48ea5 AGENTS: 密码集中 secrets.env 说明 + 公开仓库发布规则
+5b4b527 公开仓库准备: 密码改 secrets.env 机制, 大文件移出 git 历史留本地
+d335a43 快速恢复指南: 全部指向 v2 备份 (r36 基线) + 一键还原脚本入口 + 恢复后自检
+0f4b43b one-click-restore 指向 v2 备份 (r36 基线); 修 A+ rsync 源路径 (v2 tar 根打包无子目录); 加恢复后自检提示
+ec60c49 HANDOVER 备份资产索引指向 v2 权威备份 (r36 基线)
+9f6bc6a 全系统备份 v2 (r36 后基线): boot 分区 dd + rootfs tar + 元数据
+fe1be3d 方案A完成: initramfs 固化 qcom_smbx r36, 重启零依赖 charge-guard 全自动
+2dcff93 HANDOVER §7.7: 新会话执行方案 A (initramfs 固化 qcom_smbx r36) 完整交接步骤
+f873c83 charge-guard 硬件停充完成: 内核补丁0010 (r36) + charge_behaviour 属性 + r3 上线
 ```
 
 ---
 
 ## 10. 推迟的任务（可选）
 
-1. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
-2. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
-3. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
-4. **电池 40-60% 循环启动** — 当前 cap 冻结 99% (inhibit=USB直供, 电池悬浮); 要进入 40-60 区间需手动拔线放电到 60% 以下再插回, 之后磁滞自动接管
-5. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（charge-guard r3 已接管磁滞控制）
+1. **🔴 WiFi 固件崩溃修复** — 见 §7.8, 当前进行中的主任务; 路径 A (改路由器 WPA2-AES) 或路径 B (lavender 固件)
+2. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
+3. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
+4. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
+5. **电池 40-60% 循环启动** — 当前 cap 从 99% 自然放电中 (磁滞已生效: 降到 40% 自动充电到 60%)
+6. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（charge-guard r3 已接管磁滞控制）
 
 ---
 
@@ -345,7 +395,8 @@ d266e96 快速恢复指南: 新增 0.5 一键还原速查 (A-E 场景, 对接 20
 | SSH 连不上 (USB) | 检查 USB 线 / `lsusb` 看 `18d1:d001` / 重启设备 |
 | SSH 密码错误 | 用户名是 `user` 不是 `root`; 密码 `DEVICE_PASS_PLACEHOLDER` |
 | SSH host key 改变 | `ssh-keygen -R 172.16.42.1` |
-| WiFi 不连接 | `nmcli device wifi connect "LYL" password "WIFI_LYL_PASS_PLACEHOLDER" ifname wlan0` |
+| WiFi 崩溃循环 | 见 §7.8 — WiFi 已临时屏蔽; 修复前勿 `rfkill unblock wifi`; USB 通道不受影响 |
+| WiFi 不连接 | `nmcli device wifi connect "泽川源科技" password "$WIFI_CHINANET_PASS" ifname wlan0` (需 sudo) |
 | poweroff 变重启 | 用 `safe-poweroff.sh`（见 §4） |
 | rootfs 损坏 | `./scripts/one-click-restore.sh`（自动检测; 或 --mode C 重刷） |
 | 脚本/timer 丢失 | `./scripts/one-click-restore.sh`（路径 A, 30s 完成） |
@@ -361,14 +412,15 @@ d266e96 快速恢复指南: 新增 0.5 一键还原速查 (A-E 场景, 对接 20
 
 1. **读 [AGENTS.md](./AGENTS.md)** — 了解项目规则和权限
 2. **读本文件** — 了解当前状态
-3. **检查设备状态**:
+3. **🔴 若继续 WiFi 修复任务**: 直接读 §7.8（根因/证据链/两条修复路径/验证命令都已写全）, 然后按用户选择的路径执行
+4. **检查设备状态**:
    ```bash
    ping -c 2 172.16.42.1                                    # 设备是否在线
    sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@172.16.42.1 'uname -r; uptime'  # SSH 是否可达
    ```
-4. **如果设备离线**: 长按电源键 15s+ 开机，等 60-90s 后重试
-5. **根据用户需求** 查阅对应文档
+5. **如果设备离线**: 长按电源键 15s+ 开机，等 60-90s 后重试
+6. **根据用户需求** 查阅对应文档
 
 ---
 
-**最后更新**: 2026-08-18 | **git HEAD**: `519accc` | **设备**: 运行中, 一键还原已就绪
+**最后更新**: 2026-08-18 21:45 | **git HEAD**: `b9bed86` | **设备**: 运行中 (WiFi 屏蔽待修复, USB/charge-guard 正常)

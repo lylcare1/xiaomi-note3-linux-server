@@ -1,0 +1,124 @@
+=== date ===
+Tue Aug 18 18:55:33 CST 2026
+=== uname ===
+Linux xiaomi-jason 6.19.10-sdm660 #37-postmarketos-qcom-sdm660 SMP PREEMPT Tue Aug 18 08:31:06 UTC aarch64 Linux
+=== losetup ===
+NAME       SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE       DIO LOG-SEC
+/dev/loop0         0      0         0  0 /dev/mmcblk1p70   1     512
+=== by-partlabel boot ===
+/dev/mmcblk1p62
+=== blkid ===
+/dev/mmcblk1p53: SEC_TYPE="msdos" LABEL="LOGFS" UUID="D273-55EA" BLOCK_SIZE="4096" TYPE="vfat" PARTLABEL="logfs" PARTUUID="84c9546b-c054-5552-8946-88a713da1fab"
+/dev/mmcblk1p61: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" BLOCK_SIZE="4096" TYPE="ext4" PARTLABEL="persist" PARTUUID="ba60bde4-0880-2812-a055-ae781b87b617"
+/dev/mmcblk1p68: LABEL="cust" UUID="f00b9a3b-4d08-c450-8c71-e78719096954" BLOCK_SIZE="4096" TYPE="ext4" PARTLABEL="cust" PARTUUID="955dcf4a-60fe-b045-ed38-8eb4fab79bae"
+/dev/mmcblk1p58: LABEL="dsp" UUID="af32c008-2a39-7e5b-a5dc-201456d93103" BLOCK_SIZE="4096" TYPE="ext4" PARTLABEL="dsp" PARTUUID="3df69ae0-e0a9-2346-a5b7-6d50b17b23bc"
+/dev/mmcblk1p66: SEC_TYPE="msdos" UUID="00BC-614E" BLOCK_SIZE="512" TYPE="vfat" PARTLABEL="modem" PARTUUID="90070359-d538-87bd-a1e3-1c96f7ffaa76"
+/dev/mmcblk1p34: SEC_TYPE="msdos" UUID="00BC-614E" BLOCK_SIZE="4096" TYPE="vfat" PARTLABEL="bluetooth" PARTUUID="330da2e3-3322-9b0f-3d34-64edbabec016"
+/dev/mmcblk1p69: LABEL="system" UUID="da594c53-9beb-f85c-85c5-cedf76546f7a" BLOCK_SIZE="4096" TYPE="ext4" PARTLABEL="system" PARTUUID="32a80c58-b974-2318-3dde-1153c6811449"
+/dev/mmcblk1p67: UUID="57f8f4bc-abf4-655f-bf67-946fc0f9f25b" BLOCK_SIZE="4096" TYPE="ext4" PARTLABEL="cache" PARTUUID="09c3baff-c3b7-b6de-90c1-362a929fcac6"
+/dev/loop0p1: LABEL="pmOS_boot" UUID="7d83c53d-b15b-467b-a4ca-70884082589a" BLOCK_SIZE="1024" TYPE="ext2" PARTLABEL="primary" PARTUUID="bb073411-90b9-4609-a96f-9f94c409a0f1"
+/dev/loop0p2: LABEL="pmOS_root" UUID="5a0e068c-3942-46a2-acf8-285d19520550" BLOCK_SIZE="4096" TYPE="ext4" PARTLABEL="primary" PARTUUID="788546f2-1acd-47a2-911a-52e46aff9181"
+/dev/mmcblk1p35: PARTLABEL="bk8" PARTUUID="d153111b-3b90-be4f-13d5-d134c4da125c"
+/dev/mmcblk1p63: PARTLABEL="recovery" PARTUUID="2eee638c-b525-3569-271f-06c56fdc99a6"
+/dev/mmcblk1p25: PARTLABEL="cmnlib" PARTUUID="cc3bac0b-7af7-4b22-dd76-88dfa6130cbe"
+/dev/mmcblk1p15: PARTLABEL="storsec" PARTUUID="abc4f4e6-e75f-c319-8dd6-7af04a5ae915"
+/dev/mmcblk1p3: PARTLABEL="dpo" PARTUUID="764f223a-3e7c-4d50-cc69-074c6f726da9"
+/dev/mmcblk1p43: PARTLABEL="bk9" PARTUUID="25b167dd-db83-51b7-f187-9532fc17eb03"
+/dev/mmcblk1p33: PARTLABEL="dip" PARTUUID="2aecb95d-38d9-8e41-a522-fe45f860258c"
+/dev/mmcblk1p23: PARTLABEL="hyp" PARTUUID="607334ad-9e5c-f00d-3e26-425358f2adff"
+/dev/mmcblk1p51: PARTLABEL="tz" PARTUUID="dc4a7714-4b19-cb40-0ddc-e6e5e42a57e1"
+/dev/mmcblk1p13: PARTLABEL="apdp" PARTUUID="ceb672dd-0f4b-afe9-6d00-7fcd72fa8a54"
+/dev/mmcblk1p1: PARTLABEL="switch" PARTUUID="1b94c721-355d-acbd-ea18-9d8400f3b405"
+/dev/mmcblk1p41: PARTLABEL="sti" PARTUUID="0306ab35-2e7c-66a2-f2fc-4a429a1896cf"
+/dev/mmcblk1p31: PARTLABEL="pmic" PARTUUID="e77eb4a6-14ea-b0a1-5659-57884a9fc8db"
+/dev/mmcblk1p21: PARTLABEL="rpm" PARTUUID="e4434104-4122-5123-13cc-88f8e3d8016c"
+/dev/mmcblk1p11: PARTLABEL="bk5" PARTUUID="50e1743f-9592-c59f-bedc-72aa6fcb8e73"
+/dev/mmcblk1p8: PARTLABEL="bk2" PARTUUID="e71d1fe0-9192-5a0b-2d60-41093bde1e47"
+/dev/mmcblk1p48: PARTLABEL="mdtpsecappbak" PARTUUID="d34b7fc1-e5fc-a049-ab7c-c2c609de3a74"
+/dev/mmcblk1p38: PARTLABEL="abl" PARTUUID="a7a36ddc-6fe3-6801-d9b2-a4e93aeb5087"
+/dev/mmcblk1p28: PARTLABEL="cmnlib64bak" PARTUUID="7adf2725-548e-f521-7787-3fd03dd05220"
+/dev/mmcblk1p56: PARTLABEL="oops" PARTUUID="eccae4a8-8486-22fe-4e67-32268fdc9f32"
+/dev/mmcblk1p18: PARTLABEL="ddr" PARTUUID="9c5cecfe-ab4c-67b8-476d-ddb8afea689d"
+/dev/mmcblk1p6: PARTLABEL="ssd" PARTUUID="c5ef95be-3d8f-1370-b9ea-711a6afd4cb1"
+/dev/mmcblk1p46: PARTLABEL="modemst2" PARTUUID="f28d3046-7db4-e006-92cf-65f8c796043a"
+/dev/mmcblk1p36: PARTLABEL="devcfg" PARTUUID="391c8353-011d-ca89-dcf0-53d7044bdd2b"
+/dev/mmcblk1p64: PARTLABEL="logdump" PARTUUID="1d5f6da8-9b48-575c-7fd1-f558b401ae51"
+/dev/mmcblk1p26: PARTLABEL="cmnlibbak" PARTUUID="9ddb30aa-df84-e679-5361-92b749b5e2c5"
+/dev/mmcblk1p54: PARTLABEL="bk10" PARTUUID="52ab3d12-285f-d4c2-dbfe-f537b2e82d64"
+/dev/mmcblk1p16: PARTLABEL="storsecbak" PARTUUID="2557fda2-95a6-f16b-db74-c918b991c6b9"
+/dev/mmcblk1p4: PARTLABEL="bk1" PARTUUID="28115cd6-f0c9-359b-2784-651f5aff3200"
+/dev/mmcblk1p44: PARTLABEL="fsg" PARTUUID="87bca734-28bc-51e9-d587-7981970ef9f1"
+/dev/mmcblk1p62: PARTLABEL="boot" PARTUUID="07037285-39d3-94fb-3681-36e74659219d"
+/dev/mmcblk1p24: PARTLABEL="hypbak" PARTUUID="22838ae4-ec4e-859b-395b-82fbae997704"
+/dev/mmcblk1p52: PARTLABEL="tzbak" PARTUUID="6a43f43d-e371-312a-5115-d13d784482a8"
+/dev/mmcblk1p14: PARTLABEL="msadp" PARTUUID="69b8e2a9-e052-df67-d52e-bd66f968e9ce"
+/dev/mmcblk1p2: PARTLABEL="fsc" PARTUUID="1509b11f-71e5-75e0-b370-a4bb9b6e8e0e"
+/dev/mmcblk1p42: PARTLABEL="misc" PARTUUID="3d9bc2f3-ab7a-477d-9e0a-717d1f681c63"
+/dev/mmcblk1p70: PTUUID="d7c66698-fad8-421b-9c4f-96b3dbbf259a" PTTYPE="gpt" PARTLABEL="userdata" PARTUUID="99f16e6a-3b2c-e1b1-caa8-61025b590d12"
+/dev/mmcblk1p32: PARTLABEL="pmicbak" PARTUUID="99a2e63d-4759-9e7f-257d-3dac4cd7edf7"
+/dev/mmcblk1p60: PARTLABEL="splash" PARTUUID="9e92dec9-27c5-2899-9d8d-6abb35f65d96"
+/dev/mmcblk1p22: PARTLABEL="rpmbak" PARTUUID="ce33a3a1-c213-b929-5b9d-b5ab70aea034"
+/dev/mmcblk1p50: PARTLABEL="xblbak" PARTUUID="386351eb-8e07-ffa7-2ba7-d19909fd98df"
+/dev/mmcblk1p12: PARTLABEL="bk6" PARTUUID="7570a2c9-0ba2-c6b6-5410-01f22db7a9fa"
+/dev/mmcblk1p40: PARTLABEL="toolsfv" PARTUUID="84a84129-d962-83a2-4a88-4d85ae4a5a32"
+/dev/mmcblk1p30: PARTLABEL="keymasterbak" PARTUUID="cd8bfc12-4a80-8839-114e-71051c32bb56"
+/dev/mmcblk1p59: PARTLABEL="logo" PARTUUID="04dbae59-0006-2495-cd01-87e78dd766a8"
+/dev/mmcblk1p20: PARTLABEL="frp" PARTUUID="624db538-51e6-6c31-6ea6-71ddd36fd69d"
+/dev/mmcblk1p9: PARTLABEL="bk3" PARTUUID="90d5366f-93ea-406e-f9f7-0e3bb6e7727b"
+/dev/mmcblk1p49: PARTLABEL="xbl" PARTUUID="232e8ae3-812f-1829-a7e1-dfe4539d183d"
+/dev/mmcblk1p10: PARTLABEL="bk4" PARTUUID="6de8f25a-94a0-e754-e924-1ef74b239a8c"
+/dev/mmcblk1p39: PARTLABEL="ablbak" PARTUUID="f1cd37f8-76b8-b9bd-17ff-a1b96df59e19"
+/dev/mmcblk1p29: PARTLABEL="keymaster" PARTUUID="3971633f-a05e-9d29-6fa1-a03719bc969f"
+/dev/mmcblk1p57: PARTLABEL="mdtp" PARTUUID="8243edd0-ca8d-0df8-2ad0-20af845e8821"
+/dev/mmcblk1p19: PARTLABEL="keystore" PARTUUID="4e8a42ef-7429-839b-73ea-3c51c8f9dc26"
+/dev/mmcblk1p7: PARTLABEL="limits" PARTUUID="701dbab0-7fc4-f3d4-2055-1409b8c56432"
+/dev/mmcblk1p47: PARTLABEL="mdtpsecapp" PARTUUID="df4fe16c-a3ee-d473-781e-ead99c922ad0"
+/dev/mmcblk1p37: PARTLABEL="devcfgbak" PARTUUID="9b65180b-27ec-203d-89ce-993694e4eadf"
+/dev/mmcblk1p65: PARTLABEL="bk11" PARTUUID="e33a2b88-befe-94cd-f1ff-97d836ab0b8e"
+/dev/mmcblk1p27: PARTLABEL="cmnlib64" PARTUUID="93107ce2-412b-bec0-fbc0-9d3ec60aa186"
+/dev/mmcblk1p55: PARTLABEL="devinfo" PARTUUID="e52018b7-a8ed-7d5f-3f46-619f9855e7e4"
+/dev/mmcblk1p17: PARTLABEL="bk7" PARTUUID="1a5d9a2f-6c7d-c044-c3b6-24be9a71b7f9"
+/dev/mmcblk1p5: PARTLABEL="sec" PARTUUID="efde358b-7eed-272a-4e80-a882e45e2a6d"
+/dev/mmcblk1p45: PARTLABEL="modemst1" PARTUUID="93f74b69-5b2e-0a34-5673-233cb8fbe458"
+/dev/zram0: UUID="f0602543-df97-4ab6-b9a0-f3b4fa4d3871" TYPE="swap"
+=== cmdline ===
+plymouth.ignore-serial-consoles plymouth.prefer-fbcon loglevel=4 ignore_loglevel net.ifnames=0 earlycon console=ttyMSM0,115200 console=tty0 fbcon=nodefer consoleblank=60 cpuidle.off=1 pmos_boot_uuid=7d83c53d-b15b-467b-a4ca-70884082589a pmos_root_uuid=5a0e068c-3942-46a2-acf8-285d19520550 pmos_rootfsopts=defaults androidboot.veritymode=enforcing androidboot.verifiedbootstate=orange androidboot.keymaster=1 androidboot.bootdevice=c0c4000.sdhci androidboot.serialno=d1236a7b androidboot.cpuid=0x56675dc0 androidboot.hwversion=8.3.0 androidboot.product.region=cn androidboot.secureboot=1 androidboot.baseband=sdm mdss_mdp.panel=1:dsi:0:qcom,mdss_dsi_jdi_fhd_r63452_cmd:1:none:cfg:single_dsi
+=== fstab ===
+# <file system> <mount point> <type> <options> <dump> <pass>
+UUID=5a0e068c-3942-46a2-acf8-285d19520550 / ext4 defaults 0 0
+UUID=7d83c53d-b15b-467b-a4ca-70884082589a /boot ext2 nodev,nosuid,noexec 0 0
+=== apk world ===
+alpine-baselayout
+apk-tools
+busybox
+device-xiaomi-jason
+font-droid
+font-droid-nonlatin
+font-twemoji
+iw
+lang
+linux-postmarketos-qcom-sdm660
+musl-utils
+postmarketos-base
+postmarketos-base-nofde
+postmarketos-base-systemd
+postmarketos-base-ui-audio-backend-pulseaudio
+postmarketos-base-ui-wifi-wpa_supplicant
+postmarketos-mkinitfs
+postmarketos-ui-console
+sudo-rs
+=== qcom_smbx srcversion ===
+filename:       /lib/modules/6.19.10-sdm660/kernel/drivers/power/supply/qcom_smbx.ko.zst
+srcversion:     66A494BF62A12015D20C5B6
+=== charge-guard ===
+active
+holding
+boot dev: /dev/mmcblk1p62
+total 284796
+drwxr-xr-x    2 root     root           140 Aug 18 18:59 .
+drwxrwxrwt    5 root     root           120 Aug 18 18:55 ..
+-rw-r--r--    1 root     root      23667973 Aug 18 18:55 boot-block.img.gz
+-rw-r--r--    1 root     root           194 Aug 18 18:59 md5sums.txt
+-rw-r--r--    1 root     root          8814 Aug 18 18:55 meta.txt
+-rw-r--r--    1 root     root             0 Aug 18 18:55 rootfs-tar-errors.log
+-rw-r--r--    1 root     root     267940983 Aug 18 18:59 rootfs.tar.gz

@@ -1,0 +1,3 @@
+abff0eb6ba65d0cc4de3017dff3ebbf7  boot/boot-partition-dd.img.gz
+b9c60f916252981b59eb29d18ac410c9  rootfs.tar.gz
+a3a3bb6613848f14eb049a430ed6f947  partition-metadata.txt

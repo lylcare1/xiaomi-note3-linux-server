@@ -230,14 +230,17 @@ sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@172.16.42.1 'echo DEVICE_PASS_PLAC
 ## 十、权限
 
 agent 拥有最高权限：
-- 本地电脑密码: `HOST_SUDO_PASS_PLACEHOLDER`
+- **所有密码已集中到 `secrets.env`（根目录, gitignore 不入库, 已在 .gitignore）**
+- 查真实值: `cat secrets.env` 或 `source secrets.env`
+- 文档/脚本中的 `*_PLACEHOLDER` 均对应 secrets.env 里的同名变量（如 DEVICE_PASS_PLACEHOLDER ↔ DEVICE_PASS）
 - 可以自由执行命令、安装软件、增删改文件与目录
-- GitHub: `lylcare1` / `GH_TOKEN_PLACEHOLDER`
 
-### 下载资源代理
+### 仓库发布注意（2026-08-18 起生效）
 
-下载资源（git/pip 等）可调用代理：
-- 订阅链接: `PROXY_SUB_URL_PLACEHOLDER`
+- GitHub 仓库: https://github.com/lylcare1/xiaomi-note3-linux-server （**公开**）
+- 历史已 git filter-repo 清洗: 密码→占位符, 大文件（备份镜像/分区 img）移出 git **但保留本地磁盘**
+- **禁止**把 secrets.env / backups/*.img / artifacts/*.img 提交进 git（.gitignore 已配置, 勿移除）
+- 新脚本一律从 secrets.env 读密码, 不要硬编码
 
 ---
 

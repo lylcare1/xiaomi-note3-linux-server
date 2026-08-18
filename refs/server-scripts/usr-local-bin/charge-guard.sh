@@ -5,36 +5,27 @@
 #   echo 1 > ...                                          → 恢复充电
 # 规则: cap >= HIGH (60%) → 停充;  cap <= LOW (40%) → 恢复充电;  中间 → 保持当前状态
 # 频率: 2min (charge-guard.timer), 事件记 journald + 状态文件
-# 保护: 无 USB 供电 (online=0) 时不做任何事; discharge-monitor 的低电关机不受影响
+#
+# r2 修复 (2026-08-18): 移除 online 判断 — 停充后 pm660-charger/online 会翻成 0,
+#   r1 误判"拔线"又放行充电, 导致 STOP/arm 每 2min 震荡偷充电 (实测 72%→84%)。
+#   纯容量磁滞即可: 拔线场景由 discharge-monitor 低电关机兜底,
+#   40-60 区间内不做任何写入, 无磨损无震荡。
 
 HIGH_CAP=60
 LOW_CAP=40
 CHG_CTL=/sys/class/power_supply/pm660-charger/status
 BAT_CAP=/sys/class/power_supply/qcom-battery/capacity
-BAT_STAT=/sys/class/power_supply/qcom-battery/status
-CHG_ONLINE=/sys/class/power_supply/pm660-charger/online
 STATE_FILE=/run/charge-guard-mode   # "holding" | "charging" | ""
 
 TAG="charge-guard"
 
 CAP=$(cat "$BAT_CAP" 2>/dev/null || echo -1)
-BSTAT=$(cat "$BAT_STAT" 2>/dev/null || echo NA)
-ONLINE=$(cat "$CHG_ONLINE" 2>/dev/null || echo 0)
 MODE=$(cat "$STATE_FILE" 2>/dev/null || echo "")
 
 # 异常读数直接退出, 不做动作
 [ "$CAP" -lt 0 ] && exit 0
-# 无外部供电 (纯电池运行): 确保充电使能 (插回电即充), 但不反复写
-if [ "$ONLINE" = "0" ]; then
-    if [ "$MODE" != "passive" ]; then
-        echo 1 > "$CHG_CTL" 2>/dev/null
-        echo "passive" > "$STATE_FILE"
-        logger -t "$TAG" "no external power, charge-enable armed (passive)"
-    fi
-    exit 0
-fi
 
-# USB 在线, 磁滞判定
+# 纯容量磁滞判定
 if [ "$CAP" -ge "$HIGH_CAP" ]; then
     if [ "$MODE" != "holding" ]; then
         echo 0 > "$CHG_CTL" 2>/dev/null || { logger -t "$TAG" "ERROR write CHG_CTL failed"; exit 1; }

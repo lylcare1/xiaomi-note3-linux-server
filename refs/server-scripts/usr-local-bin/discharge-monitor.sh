@@ -29,17 +29,30 @@ echo "$TS cap=${CAP}% v=${MV}mV i=${MA}mA est=${MW}mW stat=${STAT} load=${LOAD} 
 tail -n 3000 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
 
 # 低电量保护: 自动软关机 (写 alert 供下次开机查看)
+# r2 (2026-08-18): 外部供电 (Charging/Full) 时绝不关机
+# 教训: 08-18 09:26 低电 halt 后插 USB 开机, cap=1% 但 Charging,
+#       r1 误触发 safe-poweroff 又关机一次 (设备 halt 态充电 3.5h 到 59% 才开机成功)
 if [ "$CAP" -ge 0 ] && [ "$CAP" -le "$LOW_CAP" ]; then
-  echo "$TS CRITICAL cap=${CAP}% <= ${LOW_CAP}%, auto safe-poweroff" >> "$LOG"
-  logger -t discharge-monitor "CRITICAL battery ${CAP}%, auto safe-poweroff"
-  /usr/local/bin/safe-poweroff.sh
-  exit 0
+  if [ "$STAT" = "Charging" ] || [ "$STAT" = "Full" ]; then
+    echo "$TS LOW cap=${CAP}% but external power (${STAT}), keep running & charging" >> "$LOG"
+    logger -t discharge-monitor "LOW cap=${CAP}% but ${STAT}, skip poweroff"
+  else
+    echo "$TS CRITICAL cap=${CAP}% <= ${LOW_CAP}%, auto safe-poweroff" >> "$LOG"
+    logger -t discharge-monitor "CRITICAL battery ${CAP}%, auto safe-poweroff"
+    /usr/local/bin/safe-poweroff.sh
+    exit 0
+  fi
 fi
 if [ "$MV" -gt 0 ] && [ "$MV" -le "$LOW_MV" ]; then
-  echo "$TS CRITICAL v=${MV}mV <= ${LOW_MV}mV, auto safe-poweroff" >> "$LOG"
-  logger -t discharge-monitor "CRITICAL voltage ${MV}mV, auto safe-poweroff"
-  /usr/local/bin/safe-poweroff.sh
-  exit 0
+  if [ "$STAT" = "Charging" ] || [ "$STAT" = "Full" ]; then
+    echo "$TS LOW v=${MV}mV but external power (${STAT}), keep running & charging" >> "$LOG"
+    logger -t discharge-monitor "LOW v=${MV}mV but ${STAT}, skip poweroff"
+  else
+    echo "$TS CRITICAL v=${MV}mV <= ${LOW_MV}mV, auto safe-poweroff" >> "$LOG"
+    logger -t discharge-monitor "CRITICAL voltage ${MV}mV, auto safe-poweroff"
+    /usr/local/bin/safe-poweroff.sh
+    exit 0
+  fi
 fi
 
 # 告警档 (30%): 只提醒

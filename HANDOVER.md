@@ -1,7 +1,7 @@
 # 项目交接文档 (Handover)
 
 > 生成日期: 2026-07-02 | 最后更新: 2026-08-18
-> 上一会话最后操作: **§7.7 initramfs 固化 r36 完成** — 重启零依赖, charge-guard 全自动接管; 无未完成的进行中任务
+> 上一会话最后操作: **全系统备份 v2 入库** (r36 后基线, 备份资产索引已更新指向 v2); 无未完成的进行中任务
 > 项目根目录: `/home/lyl/Documents/system/XiaoMiNote3`
 
 ---
@@ -135,7 +135,10 @@ cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
 ### 备份资产（一键还原的数据源）
 | 目录 | 内容 |
 |------|------|
-| [backups/full-system-20260818/](./backups/full-system-20260818/) | **全系统备份**: rootfs.tar.gz (254MB) + boot dd 镜像 + md5 校验 |
+| [backups/full-system-20260818-v2/](./backups/full-system-20260818-v2/) | **当前权威全系统备份 (18:59, r36 后基线)**: rootfs.tar.gz (268MB 零错误) + boot dd 镜像 (r36 已验证) + 元数据; 恢复路径见包内 README |
+| [backups/full-system-20260818/](./backups/full-system-20260818/) | 旧全系统备份 (14:05, **r35 基线**) — 仅作历史回退层次, 常规恢复勿用 |
+| [backups/boot-part-20260818-pre-initfs.img](./backups/) | 刷 r36 前的 boot 分区原样备份 (md5 5f1e1887), 回 r35 用 |
+| [artifacts/boot-r36-20260818.img](./artifacts/) | r36 boot.img (cmdline 已注入, 即当前 boot 分区内容) |
 | [backups/device-state-20260818/](./backups/device-state-20260818/) | 配置级备份（脚本/timer/配置 tar 包） |
 | [backups/original-jason-20260627-114354/](./backups/original-jason-20260627-114354/) | 原厂 28 分区镜像 (sha256 28/28 通过) |
 | [backups/whyred-non-hlos-20260629/](./backups/whyred-non-hlos-20260629/) | WiFi modem 固件 (whyred NON-HLOS fw 1.0.0.591) |

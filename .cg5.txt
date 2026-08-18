@@ -1,0 +1,12 @@
+=== last reboot reason ===
+Aug 18 13:45:49 xiaomi-jason systemd-shutdown[1]: Syncing filesystems and block devices.
+Aug 18 13:45:49 xiaomi-jason systemd-shutdown[1]: Sending SIGTERM to remaining processes...
+Aug 18 13:45:49 xiaomi-jason systemd-journald[714]: Received SIGTERM from PID 1 (systemd-shutdow).
+Aug 18 13:45:49 xiaomi-jason dnsmasq[2318]: exiting on receipt of SIGTERM
+Aug 18 13:45:49 xiaomi-jason systemd-journald[714]: Journal stopped
+=== charge-guard.service run ===
+script_rc=0
+mode=holding
+chg_status=Charging
+bat_status=Charging
+Aug 18 13:47:19 xiaomi-jason charge-guard[2987]: cap=72% >= 60%, charging STOPPED (battery care)

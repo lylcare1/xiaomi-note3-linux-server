@@ -1,0 +1,6 @@
+[Unit]
+Description=Battery hysteresis charge control (60%% stop / 40%% resume)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/charge-guard.sh

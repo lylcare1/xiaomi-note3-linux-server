@@ -1,0 +1,17 @@
+ 13:46:36 up 0 min,  0 users,  load average: 3.37, 0.97, 0.33
+=== charge-guard ===
+active
+inactive
+chg_status=Charging
+bat_status=Charging
+cap=72
+-- No entries --
+=== boot.mount ===
+● boot.mount - /boot
+     Loaded: loaded (/etc/fstab; generated)
+     Active: active (mounted) since Tue 2026-08-18 13:46:20 CST; 16s ago
+ Invocation: 87bcaac308094d98857b5daafe745ded
+      Where: /boot
+       What: /dev/loop0p1
+       Docs: man:fstab(5)
+             man:systemd-fstab-generator(8)

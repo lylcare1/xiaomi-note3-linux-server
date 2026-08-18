@@ -1,7 +1,7 @@
 # 项目交接文档 (Handover)
 
-> 生成日期: 2026-07-02
-> 上一会话最后操作: 执行 safe-poweroff.sh 关机, 设备已 halt
+> 生成日期: 2026-07-02 | 最后更新: 2026-08-18
+> 上一会话最后操作: one-click-restore.sh 实测通过 (路径 A); charge-guard 硬件停充调查中
 > 项目根目录: `/home/lyl/Documents/system/XiaoMiNote3`
 
 ---
@@ -25,8 +25,8 @@
 ## 2. 设备当前状态
 
 ### 2.1 运行状态
-- **设备状态**: **已 halt（软关机）** — 上一会话执行了 `safe-poweroff.sh`
-- **下次开机**: 长按电源键 15s+ 物理重启（软件层面已无法操作）
+- **设备状态**: 运行中 (2026-08-18), SSH/WiFi/USB 均正常
+- **当前网络**: WiFi `LYL` (密码 `WIFI_LYL_PASS_PLACEHOLDER`) + USB NCM `172.16.42.1`
 - **开机后**: 自动进入 Linux（boot 已持久化，无需 fastboot boot）
 
 ### 2.2 系统配置
@@ -42,7 +42,9 @@
 | init 系统 | systemd (PID 1 = systemd) |
 | USB 连接 | NCM gadget, 设备 IP `172.16.42.1/16` |
 | SSH 用户 | `user` (密码 `DEVICE_PASS_PLACEHOLDER`) |
-| WiFi | `ChinaNet-810` (密码 `WIFI_CHINANET_PASS_PLACEHOLDER`), DHCP 分配 IP |
+| WiFi | `LYL` (密码 `WIFI_LYL_PASS_PLACEHOLDER`), DHCP 分配 IP |
+| 监控体系 | 11 个 systemd timer + 13 个脚本 (见 §5) |
+| 电池 | 2026-08-16 放电实测 12h55m (99→20%), 健康度 ~98% |
 | Bootloader | unlocked |
 
 ### 2.3 关键密码
@@ -121,11 +123,22 @@ cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
 ### 脚本
 | 文件 | 用途 |
 |------|------|
+| [scripts/one-click-restore.sh](./scripts/one-click-restore.sh) | **一键还原**（A-E 场景自动检测, 2026-08-18 实测通过） |
 | [scripts/deploy.sh](./scripts/deploy.sh) | 部署/刷入/验证一体化脚本 |
+| [scripts/device-full-backup.sh](./scripts/device-full-backup.sh) | 全系统备份（rootfs tar + boot dd, 可重跑刷新快照） |
+| [scripts/restore-device-state.sh](./scripts/restore-device-state.sh) | 配置级恢复（脚本+timer+配置） |
 | [scripts/modify-bootimg-cmdline.py](./scripts/modify-bootimg-cmdline.py) | boot.img cmdline 修改工具 |
 | [scripts/apply-jason-patches.sh](./scripts/apply-jason-patches.sh) | 应用 pmaports 补丁 |
 | [scripts/backup-partitions.sh](./scripts/backup-partitions.sh) | 分区备份 |
 | [scripts/restore.sh](./scripts/restore.sh) | 恢复 |
+
+### 备份资产（一键还原的数据源）
+| 目录 | 内容 |
+|------|------|
+| [backups/full-system-20260818/](./backups/full-system-20260818/) | **全系统备份**: rootfs.tar.gz (254MB) + boot dd 镜像 + md5 校验 |
+| [backups/device-state-20260818/](./backups/device-state-20260818/) | 配置级备份（脚本/timer/配置 tar 包） |
+| [backups/original-jason-20260627-114354/](./backups/original-jason-20260627-114354/) | 原厂 28 分区镜像 (sha256 28/28 通过) |
+| [backups/whyred-non-hlos-20260629/](./backups/whyred-non-hlos-20260629/) | WiFi modem 固件 (whyred NON-HLOS fw 1.0.0.591) |
 
 ### 内核/pmaports
 | 文件 | 用途 |
@@ -138,8 +151,9 @@ cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
 | 文件 | 用途 |
 |------|------|
 | [refs/server-scripts/usr-local-bin/safe-poweroff.sh](./refs/server-scripts/usr-local-bin/safe-poweroff.sh) | **关机脚本**（软关机, halt） |
-| [refs/server-scripts/usr-local-bin/health-check.sh](./refs/server-scripts/usr-local-bin/health-check.sh) | 健康检查 r3 |
-| [refs/server-scripts/systemd/](./refs/server-scripts/systemd/) | 9 个 systemd timer 配置 |
+| [refs/server-scripts/usr-local-bin/health-check.sh](./refs/server-scripts/usr-local-bin/health-check.sh) | 健康检查 r4（电池供电/AP 离线不重启） |
+| [refs/server-scripts/usr-local-bin/charge-guard.sh](./refs/server-scripts/usr-local-bin/charge-guard.sh) | 充电磁滞控制 60%/40%（r2; **硬件停充仍未生效, 见 §7.6**） |
+| [refs/server-scripts/systemd/](./refs/server-scripts/systemd/) | systemd timer 配置 |
 | [refs/server-scripts/README.md](./refs/server-scripts/README.md) | 脚本说明 |
 
 ### pmbootstrap 工作目录
@@ -172,17 +186,20 @@ cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
 ### 7.1 rootfs 重刷后脚本丢失（重要）
 `pmbootstrap install` + `fastboot flash userdata` 重刷 rootfs 后：
 - `/usr/local/bin/` 为空，`safe-poweroff.sh` 丢失
-- 9 个 systemd timer + 监控脚本全部丢失
-- 必须重新部署：
+- 11 个 systemd timer + 监控脚本全部丢失
+- **恢复方法（一键）**: `./scripts/one-click-restore.sh`（自动检测设备状态, 路径 A 实测 30s 完成恢复）
+- 手动部署见 [refs/server-scripts/README.md](./refs/server-scripts/README.md)
 
-```bash
-# 部署 safe-poweroff.sh
-sshpass -p 'DEVICE_PASS_PLACEHOLDER' scp refs/server-scripts/usr-local-bin/safe-poweroff.sh user@172.16.42.1:/tmp/
-sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@172.16.42.1 'echo DEVICE_PASS_PLACEHOLDER | sudo -S install -m 755 /tmp/safe-poweroff.sh /usr/local/bin/'
+一键还原场景对照（详见 [docs/快速恢复指南.md §0.5](./docs/快速恢复指南.md)）：
 
-# 部署 9 个监控脚本 + timer（如有需要）
-# 见 refs/server-scripts/README.md
-```
+| 模式 | 场景 | 动作 |
+|------|------|------|
+| A（自动） | SSH 通, 脚本/配置丢 | restore-device-state.sh |
+| A+ | 系统文件坏但 SSH 通 | rsync 全量 rootfs (254MB) |
+| B（自动） | SSH 不通, fastboot 通 | fastboot flash boot (dd 镜像) |
+| C | boot+rootfs 全坏 | deploy --all + A+ |
+| D | WiFi 固件坏 | fastboot flash modem (whyred) |
+| E | 回原厂（需输 yes） | flash_all.sh |
 
 ### 7.2 rootfs UUID 变化
 `pmbootstrap install` 会重新生成 rootfs，UUID 会变，必须用 `deploy.sh --update-uuid` 同步 boot.img cmdline。
@@ -195,6 +212,16 @@ modem 分区刷入 whyred NON-HLOS.bin（fw 1.0.0.591），非 jason 原厂（�
 
 ### 7.5 PSCI 固件 bug
 `psci: [Firmware Bug]: failed to set PC mode: -3` — 影响 CPU idle，但不影响启动。
+
+### 7.6 charge-guard 硬件停充未生效（进行中, 2026-08-18）
+用户需求：电量 ≥60% 停充, ≤40% 恢复充电（保护电池防鼓包）。
+- r1 bug: 停充后 `pm660-charger/online` 翻 0 → 误判拔线 → 震荡偷充电（实测 72%→84%）→ r2 移除 online 判断已修复
+- **r2 遗留**: `echo 0 > status` 只改 sysfs 标志位，PMIC 硬件仍在充电（+370mA, 85→88%）
+- 调查进展: 已拿驱动源码 `/tmp/smbx3.c`（qcom-smbx-charger），关键寄存器:
+  - `CHARGING_ENABLE_CMD=0x42`, `CHARGING_ENABLE_CMD_BIT=BIT(0)`
+  - charger 基址 0x1000 → 实际寄存器 0x1042
+  - regmap debugfs 可直访: `/sys/kernel/debug/regmap/0-00/registers`
+- 下一步: 分析源码 680-714 行 STATUS 写入逻辑, 尝试 regmap 直写 0x1042 bit0 实现真停充
 
 ---
 
@@ -234,24 +261,22 @@ pmbootstrap export
 ## 9. 最近 git 历史
 
 ```
-0c3a6e7 (HEAD -> main) poweroff 调查完成: SDM660 软件断电不可行, safe-poweroff.sh 为最终方案
-28012eb feat: add safe-poweroff.sh to halt without softdog reboot
-ca083cb docs: poweroff unreliable, use sync + long-press power button
-85f9f12 docs(使用文档): add poweroff instructions + slim bluetooth/battery
-65982be docs: add 快速恢复指南.md + fix 设备状态清单 UUID/mode
-dc83086 docs: add health-check r3 + CPU/memory stress test r2 results
-0944f1f feat(health-check): r3 skip wlan0/gateway checks when WiFi radio off
-9a947be fix(health-check): r2 split soft/hard failures to stop backpack bootloop
+519accc (HEAD -> main) one-click-restore.sh 一键还原 (A-E 场景自动检测); charge-guard r2 修复停充震荡偷充电 bug; 已实测路径 A
+d266e96 快速恢复指南: 新增 0.5 一键还原速查 (A-E 场景, 对接 2026-08-18 全系统备份)
+741ed95 修复原厂备份 sha256 清单(补全 15 个缺失条目, 28/28 校验通过)
+24a204f 全系统备份: rootfs tar+boot dd+boot 文件+分区元数据, 4 场景恢复文档
+1f28a2e charge-guard 磁滞充电控制 (60/40): status 属性可写发现+部署+全量备份+一键恢复脚本
 ```
 
 ---
 
 ## 10. 推迟的任务（可选）
 
-1. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
-2. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
-3. **重新部署 9 个监控脚本** — rootfs 重刷后丢失（health-check/temp-monitor/net-monitor 等 systemd timer）
-4. **battery-care 电池保养** — 长期 100% 充电易鼓包，需物理管理 + 软件监控
+1. **charge-guard 硬件停充**（最高优先级, 见 §7.6）— regmap 直写 0x1042 实验
+2. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
+3. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
+4. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
+5. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（硬件停充修好后由 charge-guard 接管）
 
 ---
 
@@ -263,10 +288,11 @@ dc83086 docs: add health-check r3 + CPU/memory stress test r2 results
 | SSH 连不上 (USB) | 检查 USB 线 / `lsusb` 看 `18d1:d001` / 重启设备 |
 | SSH 密码错误 | 用户名是 `user` 不是 `root`; 密码 `DEVICE_PASS_PLACEHOLDER` |
 | SSH host key 改变 | `ssh-keygen -R 172.16.42.1` |
-| WiFi 不连接 | `nmcli device wifi connect "ChinaNet-810" password "WIFI_CHINANET_PASS_PLACEHOLDER" ifname wlan0` |
+| WiFi 不连接 | `nmcli device wifi connect "LYL" password "WIFI_LYL_PASS_PLACEHOLDER" ifname wlan0` |
 | poweroff 变重启 | 用 `safe-poweroff.sh`（见 §4） |
-| rootfs 损坏 | `./scripts/deploy.sh --all`（设备需进 fastboot） |
-| 完全回退原厂 | `cd jason_images_* && ./flash_all.sh`（见 [刷机指南.md](./docs/刷机指南.md)） |
+| rootfs 损坏 | `./scripts/one-click-restore.sh`（自动检测; 或 --mode C 重刷） |
+| 脚本/timer 丢失 | `./scripts/one-click-restore.sh`（路径 A, 30s 完成） |
+| 完全回退原厂 | `./scripts/one-click-restore.sh --mode E`（见 [刷机指南.md](./docs/刷机指南.md)） |
 
 详见 [docs/快速恢复指南.md](./docs/快速恢复指南.md)。
 
@@ -288,4 +314,4 @@ dc83086 docs: add health-check r3 + CPU/memory stress test r2 results
 
 ---
 
-**最后更新**: 2026-07-02 | **git HEAD**: `0c3a6e7` | **设备**: 已 halt（需长按电源键重启）
+**最后更新**: 2026-08-18 | **git HEAD**: `519accc` | **设备**: 运行中, 一键还原已就绪

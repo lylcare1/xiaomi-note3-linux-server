@@ -92,7 +92,7 @@ git add -A && git commit -m "简短说明"
 | 系统 | postmarketOS edge (Alpine Linux), systemd |
 | USB 连接 | NCM, 设备 IP `172.16.42.1/16` |
 | SSH | `user@172.16.42.1`, 密码 `DEVICE_PASS_PLACEHOLDER` |
-| WiFi | `ChinaNet-810` (密码 `WIFI_CHINANET_PASS_PLACEHOLDER`) |
+| WiFi | `泽川源科技` 2.4G (密码 `WIFI_CHINANET_PASS_PLACEHOLDER`) — 2026-08-18 起路由器更换; 5G 版 ath10k 关联被拒, 只用 2.4G |
 | Bootloader | unlocked, boot 已持久化（开机即 Linux） |
 
 详见 [HANDOVER.md](./HANDOVER.md) 和 [docs/设备状态清单.md](./docs/设备状态清单.md)。
@@ -252,7 +252,7 @@ agent 拥有最高权限：
 | SSH 连不上 (USB) | 检查 USB 线 / `lsusb` 看 `18d1:d001` / 重启设备 |
 | SSH 密码错误 | 用户名是 `user` 不是 `root`; 密码 `DEVICE_PASS_PLACEHOLDER` |
 | SSH host key 改变 | `ssh-keygen -R 172.16.42.1` |
-| WiFi 不连接 | `nmcli device wifi connect "ChinaNet-810" password "WIFI_CHINANET_PASS_PLACEHOLDER" ifname wlan0` |
+| WiFi 不连接 | `sudo nmcli device wifi connect "泽川源科技" password "$WIFI_CHINANET_PASS" ifname wlan0` (2026-08-18 起新路由器; 需 sudo, user 无 polkit 权限) |
 | poweroff 变重启 | 用 `safe-poweroff.sh`（见 §四 4.1） |
 | rootfs 损坏 | `./scripts/deploy.sh --all`（设备需进 fastboot） |
 | 完全回退原厂 | `cd jason_images_* && ./flash_all.sh`（见 [刷机指南.md](./docs/刷机指南.md)） |

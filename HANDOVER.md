@@ -1,7 +1,7 @@
 # 项目交接文档 (Handover)
 
 > 生成日期: 2026-07-02 | 最后更新: 2026-08-18
-> 上一会话最后操作: one-click-restore.sh 实测通过 (路径 A); charge-guard 硬件停充调查中
+> 上一会话最后操作: **charge-guard 硬件停充已完成** — 内核补丁 0010 (r36) + charge_behaviour 属性 + charge-guard r3 部署上线
 > 项目根目录: `/home/lyl/Documents/system/XiaoMiNote3`
 
 ---
@@ -37,7 +37,7 @@
 | 内存 | 6 GB |
 | 存储 | 128 GB eMMC |
 | 系统 | postmarketOS edge (Alpine Linux) |
-| 内核 | `6.19.10-sdm660` (r35, #36-postmarketos-qcom-sdm660) |
+| 内核 | `6.19.10-sdm660` (r36, #36-postmarketos-qcom-sdm660) |
 | 内核特性 | cpufreq-hw + softdog watchdog + msm-poweroff 补丁 (0009) |
 | init 系统 | systemd (PID 1 = systemd) |
 | USB 连接 | NCM gadget, 设备 IP `172.16.42.1/16` |
@@ -152,7 +152,7 @@ cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
 |------|------|
 | [refs/server-scripts/usr-local-bin/safe-poweroff.sh](./refs/server-scripts/usr-local-bin/safe-poweroff.sh) | **关机脚本**（软关机, halt） |
 | [refs/server-scripts/usr-local-bin/health-check.sh](./refs/server-scripts/usr-local-bin/health-check.sh) | 健康检查 r4（电池供电/AP 离线不重启） |
-| [refs/server-scripts/usr-local-bin/charge-guard.sh](./refs/server-scripts/usr-local-bin/charge-guard.sh) | 充电磁滞控制 60%/40%（r2; **硬件停充仍未生效, 见 §7.6**） |
+| [refs/server-scripts/usr-local-bin/charge-guard.sh](./refs/server-scripts/usr-local-bin/charge-guard.sh) | 充电磁滞控制 60%/40%（r3, 硬件停充, 需内核 r36+, 见 §7.6） |
 | [refs/server-scripts/systemd/](./refs/server-scripts/systemd/) | systemd timer 配置 |
 | [refs/server-scripts/README.md](./refs/server-scripts/README.md) | 脚本说明 |
 
@@ -213,15 +213,34 @@ modem 分区刷入 whyred NON-HLOS.bin（fw 1.0.0.591），非 jason 原厂（�
 ### 7.5 PSCI 固件 bug
 `psci: [Firmware Bug]: failed to set PC mode: -3` — 影响 CPU idle，但不影响启动。
 
-### 7.6 charge-guard 硬件停充未生效（进行中, 2026-08-18）
-用户需求：电量 ≥60% 停充, ≤40% 恢复充电（保护电池防鼓包）。
-- r1 bug: 停充后 `pm660-charger/online` 翻 0 → 误判拔线 → 震荡偷充电（实测 72%→84%）→ r2 移除 online 判断已修复
-- **r2 遗留**: `echo 0 > status` 只改 sysfs 标志位，PMIC 硬件仍在充电（+370mA, 85→88%）
-- 调查进展: 已拿驱动源码 `/tmp/smbx3.c`（qcom-smbx-charger），关键寄存器:
-  - `CHARGING_ENABLE_CMD=0x42`, `CHARGING_ENABLE_CMD_BIT=BIT(0)`
-  - charger 基址 0x1000 → 实际寄存器 0x1042
-  - regmap debugfs 可直访: `/sys/kernel/debug/regmap/0-00/registers`
-- 下一步: 分析源码 680-714 行 STATUS 写入逻辑, 尝试 regmap 直写 0x1042 bit0 实现真停充
+### 7.6 charge-guard 硬件停充 ✅ 已完成（2026-08-18）
+用户需求：电量 ≥60% 停充, ≤40% 恢复充电（保护电池防鼓包）。**已实现并部署**。
+
+**方案**: 内核补丁 `0010-smbx-charge-behaviour.patch` 给 qcom_smbx 驱动新增标准
+`POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR` 属性（pkgrel 35→36），userspace 直接:
+```sh
+echo inhibit-charge > /sys/class/power_supply/pm660-charger/charge_behaviour  # 硬件停充
+echo auto           > /sys/class/power_supply/pm660-charger/charge_behaviour  # 恢复充电
+```
+
+**关键寄存器操作**（补丁实现, 前人盲点是 CHG_EN_SRC_BIT 前置条件）:
+- `CHGR_CFG2(0x1051)` bit7 `CHG_EN_SRC_BIT` 置 1 → 软件控制模式（**必须先设**, 否则 0x1042 写入被硬件忽略, init 序列默认不设此位）
+- `CHARGING_ENABLE_CMD(0x1042)` bit0: 1=充电使能, 0=停充
+
+**验证证据**（2026-08-18 17:06-17:35 实测）:
+- inhibit 后: `1042=00, 1051=81, 1006=0x47`（低3位=111 DISABLE_CHARGE 状态机 + bit6 CC_SOFT_TERMINATE）
+- cap=99% 冻结 22 分钟（若真放电 +300mA 早掉 3%, 若真充电早到 100%）→ 电池净电流≈0, USB 直供系统 — 理想停充行为
+- A/B 测试: `auto` 写入 → 1042 恢复 01, 命令通路完好; 1006 仍 DISABLE 是电池已满(4.44V)硬件自身 inhibit, 自洽
+- 之前 "44 秒被改回" 的元凶 = 当时仍在跑的旧 charge-guard 服务干扰, timer 停掉后 inhibit 稳定 20+ 分钟
+- `current_now`(+300mA 显示)在此平台读数不可信（疑测系统负载电流）, 不作为停充判据
+
+**部署状态**: charge-guard.sh r3 + timer (2min) 已上线, 首次动作已验证
+`cap=99% >= 60%, charging STOPPED (hw inhibit, battery care)`
+
+**注意事项**:
+- 重刷 rootfs 后模块会回旧版 → 需重新 `pmbootstrap install`（r36 已包含）或手动替换 .ko.zst
+- 重启后模块从 initramfs 旧副本加载 → 需 `rmmod qcom_smbx && modprobe qcom_smbx` 从 rootfs 加载新模块（rootfs 上 md5=5cfe139c 为 r36）
+- charge-guard r3 有属性存在性守卫: 属性缺失时拒绝运行并记 ERROR 日志
 
 ---
 
@@ -272,11 +291,11 @@ d266e96 快速恢复指南: 新增 0.5 一键还原速查 (A-E 场景, 对接 20
 
 ## 10. 推迟的任务（可选）
 
-1. **charge-guard 硬件停充**（最高优先级, 见 §7.6）— regmap 直写 0x1042 实验
-2. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
-3. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
-4. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
-5. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（硬件停充修好后由 charge-guard 接管）
+1. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
+2. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
+3. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
+4. **initramfs qcom_smbx 模块同步** — 重启后需 rmmod+modprobe 从 rootfs 加载 r36 模块（已知操作, 可选 pmbootstrap initfs 固化）
+5. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（charge-guard r3 已接管磁滞控制, 手动拔线放电即可）
 
 ---
 

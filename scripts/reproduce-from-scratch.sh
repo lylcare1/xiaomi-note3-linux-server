@@ -72,7 +72,7 @@ SSH_USER="user"
 SSH_PASS="1234"
 
 # 本机 sudo 密码
-LOCAL_SUDO_PASS="HOST_SUDO_PASS_PLACEHOLDER"
+LOCAL_SUDO_PASS="${HOST_SUDO_PASS:?需 ../secrets.env}"
 
 # 是否跳过刷入步骤
 NO_FLASH=0

@@ -7,8 +7,10 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 ROOT=$(pwd)
-PASS='DEVICE_PASS_PLACEHOLDER'
-HOSTPASS='HOST_SUDO_PASS_PLACEHOLDER'
+# 密码从 secrets.env 读取 (不入库); 无则回落到环境变量
+if [ -f "$ROOT/secrets.env" ]; then . "$ROOT/secrets.env"; fi
+PASS="${DEVICE_PASS:?需 secrets.env 定义 DEVICE_PASS 或 export}"
+HOSTPASS="${HOST_SUDO_PASS:?需 secrets.env 定义 HOST_SUDO_PASS 或 export}"
 DEV=user@172.16.42.1
 SSH="sshpass -p $PASS ssh -o ConnectTimeout=8 -o PreferredAuthentications=password -o PubkeyAuthentication=no $DEV"
 

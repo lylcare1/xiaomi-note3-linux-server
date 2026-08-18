@@ -36,7 +36,7 @@ BOOT_IMG="$ARTIFACTS/boot-r31-20260702.img"
 ROOTFS_IMG="$ARTIFACTS/rootfs-r31-20260702.img"
 DEV_IP="172.16.42.1"
 SSH_USER="user"
-SSH_PASS="DEVICE_PASS_PLACEHOLDER"
+SSH_PASS="${DEVICE_PASS:?需 ../secrets.env}"
 
 # 检查文件
 check_files() {

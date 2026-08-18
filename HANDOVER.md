@@ -1,7 +1,7 @@
 # 项目交接文档 (Handover)
 
 > 生成日期: 2026-07-02 | 最后更新: 2026-08-18
-> 上一会话最后操作: charge-guard 硬件停充完成 (§7.6); **新会话请直接执行 §7.7 方案 A: initramfs 固化 qcom_smbx r36**
+> 上一会话最后操作: **§7.7 initramfs 固化 r36 完成** — 重启零依赖, charge-guard 全自动接管; 无未完成的进行中任务
 > 项目根目录: `/home/lyl/Documents/system/XiaoMiNote3`
 
 ---
@@ -242,64 +242,38 @@ echo auto           > /sys/class/power_supply/pm660-charger/charge_behaviour  # 
 - 重启后模块从 initramfs 旧副本加载 → 需 `rmmod qcom_smbx && modprobe qcom_smbx` 从 rootfs 加载新模块（rootfs 上 md5=5cfe139c 为 r36）
 - charge-guard r3 有属性存在性守卫: 属性缺失时拒绝运行并记 ERROR 日志
 
-### 7.7 【下一步任务】initramfs 固化 qcom_smbx r36 模块（方案 A, 待执行）
+### 7.7 initramfs 固化 qcom_smbx r36 模块 ✅ 已完成（2026-08-18 18:31, 方案 A）
 
-**背景**: §7.6 硬件停充已上线, 但 initramfs 里仍是 r35 旧模块（无 charge_behaviour 属性）。
-重启后旧模块先加载 → modprobe no-op → **charge-guard 失效, PMIC 回默认行为（插电充到满）, 40/60 磁滞失效**。
-临时补救 = SSH 进设备执行 `sudo rmmod qcom_smbx && sudo modprobe qcom_smbx`（rootfs 上是 r36）。
-2026-08-18 16:37 health-check 触发过一次自动重启, 已实测此退化路径。
+**问题**: initramfs 里曾是 r35 旧模块（无 charge_behaviour）, 重启后 charge-guard 失效需手动 rmmod+modprobe。
+**结果**: **已固化, 重启零依赖** — 开机即 r36, charge-guard 2min 内自动接管 (18:31:36 实测 `charging STOPPED (hw inhibit)`)。
 
-**任务**: 重做 initramfs 使其包含 r36 模块, 重启后无需任何手动操作。
-
-**执行步骤（方案 A 全流程）**:
+**实际执行路径**（与原计划的关键差异）:
+1. `pmbootstrap initfs` 直接跑**无效** — rootfs chroot 里装的是旧内核包, initramfs 打包的还是 r35 (24344 字节/srcversion 5B07...)
+2. `pmbootstrap install` 会尝试升级上游 7.0.14 内核且网络下载失败, 不可用
+3. **正确做法**: apk.static 直装本地 r36 apk 进 chroot, 再 initfs:
 ```bash
-# 0. 前置: 确认 r36 内核包已构建 (已构建, 见 §7.6; 若清过缓存则先)
-pmbootstrap build linux-postmarketos-qcom-sdm660   # 产物 pkgrel=r36, ccache 加速约 1min
-
-# 1. 重做 initramfs (会从 r36 内核包拉取模块, device-xiaomi-jason 的
-#    modules-initfs 列表含 qcom_smbx, 见
-#    pmaports/device/testing/device-xiaomi-jason/modules-initfs 第 5 行)
-pmbootstrap initfs
-
-# 2. 导出 boot.img (initramfs 打包在 boot.img 内)
-pmbootstrap export    # 产物默认到 ~/Documents/system/XiaoMiNote3/artifacts/ 或 pmos-export/
-
-# 3. 设备进 fastboot (设备当前在运行, SSH 可达)
-sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@172.16.42.1 'echo DEVICE_PASS_PLACEHOLDER | sudo -S reboot bootloader'
-# 等待 fastboot 模式 (本机 fastboot devices 能看到)
-
-# 4. 临时启动验证 (先不写分区, 验证无误再持久化 — 标准安全流程)
-fastboot boot <导出的 boot.img 路径>
-# 等待 60-90s 设备启动, SSH 重连
-
-# 5. 验证 initramfs 加载的就是 r36:
-sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@172.16.42.1 \
-  'cat /sys/class/power_supply/pm660-charger/charge_behaviour'
-# 预期输出含 [auto] / inhibit-charge  → 属性在, 成功
-# 若报 No such file → 失败, 检查 pmbootstrap export 是否真用了 r36 (ls -la 导出目录时间戳)
-
-# 6. 持久化写 boot 分区
-./scripts/deploy.sh --persist
-./scripts/deploy.sh --verify
-
-# 7. 再重启一次做最终验证 (验证持久化后重启仍生效)
-sshpass -p 'DEVICE_PASS_PLACEHOLDER' ssh user@172.16.42.1 'echo DEVICE_PASS_PLACEHOLDER | sudo -S reboot'
-# 60-90s 后重连, 重复第 5 步验证 + charge-guard.timer active + journalctl -t charge-guard 有动作
+sudo ~/.local/var/pmbootstrap/apk.static --root ~/.local/var/pmbootstrap/chroot_rootfs_xiaomi-jason \
+  --repository ~/.local/var/pmbootstrap/packages/edge add --allow-untrusted \
+  ~/.local/var/pmbootstrap/packages/edge/aarch64/linux-postmarketos-qcom-sdm660-6.19.10-r36.apk
+pmbootstrap initfs && pmbootstrap export
 ```
+4. 验证 initramfs 内模块: 解包 cpio → `modinfo` srcversion 必须 = `66A494BF62A12015D20C5B6` (24808 字节)
+5. cmdline 注入: 用**设备现役 /proc/cmdline 的 UUID** (boot=7d83c53d... root=5a0e068c...), 不要信 export 镜像自带的 (它是 debug 版含 pmos.debug-shell)
+```bash
+python3 scripts/modify-bootimg-cmdline.py /tmp/postmarketOS-export/boot.img /tmp/boot-r36-cmdline.img "<现役完整 cmdline>"
+```
+6. `fastboot boot` 临时验证 → `deploy.sh --flash-boot` 持久化 (自动备份+MD5+magic 校验+重启)
 
-**风险与回退**:
-- boot.img 由 `deploy.sh --persist` dd 写入 boot 分区, 失败可回退: `backups/` 有原厂 boot 备份,
-  或 `./scripts/one-click-restore.sh --mode B` (fastboot flash boot dd 镜像)
-- rootfs **不需要重刷** (r36 模块已在 rootfs 上, 只是 initramfs 副本旧) — 只动 boot.img
-- 注意 §4.3: 若顺手重刷 rootfs 则 UUID 会变需 --update-uuid; 只重做 initramfs 不涉及
-- cpuidle.off=1 等 cmdline 参数不变 (kernel-cmdline.conf 未动)
+**验证证据（三重）**:
+- fastboot boot 临时启动: charge_behaviour 开箱即在, charge-guard 18:27:09 自动接管
+- boot 分区持久化后重启: srcversion=66A494BF 从 boot 分区加载
+- 18:31:36 (开机~2min): `cap=99% >= 60%, charging STOPPED (hw inhibit, battery care)` 全自动
 
-**已知坑**:
-- pmbootstrap export 的输出目录每次会覆盖, 记得确认导出时间戳是刚生成的
-- 设备 fastboot 模式识别不到 → 换 USB 口/线, `fastboot devices` 反复插拔
-- 验证时 SSH 不通 → 等 60-90s; 仍不通按 §11 决策表处理
+**资产**:
+- 刷前 boot 分区备份: `backups/boot-part-20260818-pre-initfs.img` (md5 5f1e1887)
+- r36 boot.img: `/tmp/boot-r36-cmdline.img` (cmdline 已注入, 23.7MB)
 
-**完成后**: 更新本节为已完成, 移除 §10 任务 4; git commit; 顺手观察 charge-guard 一轮正常动作
+**遗留**: /tmp 下的 boot-r36 镜像重启本机会丢; 若需长期保留复制到 artifacts/
 
 ---
 
@@ -352,12 +326,11 @@ d266e96 快速恢复指南: 新增 0.5 一键还原速查 (A-E 场景, 对接 20
 
 ## 10. 推迟的任务（可选）
 
-1. **【最高优先级·新会话直接做】initramfs qcom_smbx 模块固化** — **见 §7.7 完整执行步骤（方案 A）**; 重启后 charge-guard 失效问题
-2. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
-3. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
-4. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
-5. **电池 40-60% 循环启动** — 当前 cap 冻结 99% (inhibit=USB直供, 电池悬浮); 要进入 40-60 区间需手动拔线放电到 60% 以下再插回, 之后磁滞自动接管
-6. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（charge-guard r3 已接管磁滞控制）
+1. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
+2. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
+3. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
+4. **电池 40-60% 循环启动** — 当前 cap 冻结 99% (inhibit=USB直供, 电池悬浮); 要进入 40-60 区间需手动拔线放电到 60% 以下再插回, 之后磁滞自动接管
+5. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（charge-guard r3 已接管磁滞控制）
 
 ---
 

@@ -135,8 +135,9 @@ cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
 ### 备份资产（一键还原的数据源）
 | 目录 | 内容 |
 |------|------|
-| [backups/full-system-20260818-v2/](./backups/full-system-20260818-v2/) | **当前权威全系统备份 (18:59, r36 后基线)**: rootfs.tar.gz (268MB 零错误) + boot dd 镜像 (r36 已验证) + 元数据; 恢复路径见包内 README |
-| [backups/full-system-20260818/](./backups/full-system-20260818/) | 旧全系统备份 (14:05, **r35 基线**) — 仅作历史回退层次, 常规恢复勿用 |
+| [backups/full-system-20260829-fixed/](./backups/full-system-20260829-fixed/) | **当前权威全系统备份 (2026-08-29 修复后基线)**: rootfs.tar.gz (278MB, 含 WiFi 新固件) + boot dd 镜像 + md5 全部通过; 恢复路径见包内 README |
+| [backups/full-system-20260818-v2/](./backups/full-system-20260818-v2/) | 旧全系统备份 (18:59, 修复前 r36 基线) — 仅作历史回退层次, 常规恢复勿用 |
+| [artifacts/firmware-wcn3990-20260829/](./artifacts/firmware-wcn3990-20260829/) | WiFi 固件三件套归档 (wlanmdsp WLAN.HL.2.0 + board-2 + firmware-5), rootfs 重刷后重装用 |
 | [backups/boot-part-20260818-pre-initfs.img](./backups/) | 刷 r36 前的 boot 分区原样备份 (md5 5f1e1887), 回 r35 用 |
 | [artifacts/boot-r36-20260818.img](./artifacts/) | r36 boot.img (cmdline 已注入, 即当前 boot 分区内容) |
 | [backups/device-state-20260818/](./backups/device-state-20260818/) | 配置级备份（脚本/timer/配置 tar 包） |

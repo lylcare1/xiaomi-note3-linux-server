@@ -1,7 +1,7 @@
 # 项目交接文档 (Handover)
 
-> 生成日期: 2026-07-02 | 最后更新: 2026-08-18 21:45
-> 上一会话最后操作: **WiFi 固件崩溃调查（根因已锁定, 待执行修复）** — 详见 §7.8; 设备 WiFi 已临时屏蔽止住重启循环, USB 通道正常, charge-guard 正常
+> 生成日期: 2026-07-02 | 最后更新: 2026-08-29 03:20
+> 上一会话最后操作: **底层问题批量修复完成** — ① 时钟错 13 天 (swclock/fake-rtc 链路断裂, 已修复) ② health-check r7 在 rfkill 屏蔽下误报 (r8 守卫已打) ③ WiFi 固件崩溃 (替换上游 WLAN.HL.2.0 固件三件套后恢复, 已连 LYL 0 崩溃); USB/WiFi 双通道正常, charge-guard 正常
 > 项目根目录: `/home/lyl/Documents/system/XiaoMiNote3`
 
 ---
@@ -278,49 +278,46 @@ python3 scripts/modify-bootimg-cmdline.py /tmp/postmarketOS-export/boot.img /tmp
 
 **遗留**: /tmp 下的 boot-r36 镜像重启本机会丢; 若需长期保留复制到 artifacts/
 
-### 7.8 WiFi 固件崩溃循环（WPA1/TKIP 触发）🔴 进行中 — 根因已锁定, 待修复验证
+### 7.8 WiFi 固件崩溃循环 ✅ 已修复（2026-08-29 03:14, 固件三件套替换）
 
-**时间线**（2026-08-18 20:04 起）:
-- 20:04 换新路由器「泽川源科技」(2.4G ch1 + 5G ch36) 后, WCN3990 固件开始反复崩溃
-- 首轮处置: health-check r5→r6 (驱动重载自愈) → r7 (QMI error 90 深卡死时立即 reboot)
-- r7 生效后全链路自愈 11s (21:08:26 重载失败 → 21:08:36 reboot), 但**崩溃本身未止**, 当日累计 100+ 次
+**结果**: WiFi 已恢复连接 LYL (10.57.122.140), 修复后 0 次固件崩溃, WiFi SSH 实测通过。
 
-**根因证据链**（已排除其他假设）:
-1. **崩溃模式**: 恢复后立即再崩, 精确 6s 周期循环 (21:10:37→43→49→55); 21:00:00 整点首次崩溃
-2. **AP 加密**: `nmcli dev wifi list` 显示两个 SSID 均为 **`WPA1 WPA2` 混合模式** → WPA1 IE = TKIP 兼容广播
-3. **固件版本无关已证**: modem 分区 wlanmdsp.mbn (md5 6d7a52cc, 2020-06 whyred 版) 与 6 月 29 日备份**逐字节一致**; rootfs ath10k 固件文件 v1/v2 备份 vs 当前也一致 → 固件从未变过, 是新环境触发老固件 bug
-4. **换路由器是唯一环境变量**: 旧路由器 ChinaNet-810 时代零崩溃; 同固件跑新 AP 首日即崩
-5. 充电改造 (r36/charge-guard) 与 WiFi 崩溃**无关** — 两套系统完全隔离, 固件 CRC 在充电改造前后一致
+**根因回顾**: 2026-08-18 换路由器后 WCN3990 固件 (WLAN.HL.1.0.1.c2-00538, 2019-07 build) 反复崩溃
+(modem remoteproc crash → 6s 精确循环, 8-18 当日 100+ 次), 触发源为新 AP 环境下的老固件 bug。
 
-**已知事实（固件调查结论）**:
-- jason 原厂 wlanmdsp (1.0.0.533) 与 mainline 驱动不兼容 (2026-06-28 实测, boot 后 350ms fatal), **不可回退**
-- whyred 最后版本 (MIUI 12.0.3.0 China 2021-05) wlanmdsp 仍为 2020-06 版 → whyred 系无更新固件
-- **lavender (红米 Note 7) = 同 SDM660 + 同 WCN3990, 官方支持至 MIUI 12.5 (2021-11)** → 潜在更新 wlanmdsp 来源
-- modem 分区 FAT 可 loop 挂载: `sudo mount -o ro,loop /dev/disk/by-partlabel/modem /mnt/modemro`
+**修复方案（底层固件替换, rootfs 层可回退）**:
+从 linux-firmware 上游仓库下载 WCN3990 三件套替换/补装到 `/lib/firmware/ath10k/WCN3990/hw1.0/`:
 
-**两条修复路径**:
-| 路径 | 操作 | 状态 |
-|---|---|---|
-| A. 改路由器加密 | 管理页把「WPA/WPA2 混合」改「WPA2-PSK(AES) only」 | 用户未确认是否可操作路由器 |
-| B. 换固件 | 下载 lavender fastboot ROM (2.4GB) → 提取 wlanmdsp.mbn → 刷 modem 分区 | 未开始 |
+| 文件 | 版本 | md5 | 说明 |
+|---|---|---|---|
+| wlanmdsp.mbn | WLAN.HL.2.0-01387 (新 3.7MB) | 259b4f9e | **主固件**, 原为 modem 分区 2019 版经 tqftpserv 提供 |
+| board-2.bin | 上游 board-2 | 420356eb | board 数据 (board_id 匹配), 原缺失 |
+| firmware-5.bin | 上游 feature flags | d16e3444 | 原 60B 为旧 flags |
 
-**当前设备状态（待修复期间）**:
-- WiFi 已 `rfkill block wifi` 屏蔽, `泽川源科技` 连接 autoconnect=no
-- health-check.timer **已停** (`inactive`), 崩溃循环已止 (屏蔽后 0 新增)
-- USB NCM `172.16.42.1` 正常, charge-guard (60/40 磁滞) 正常运行
+- 原固件备份: 设备 `/var/backups/ath10k-wcn3990-orig/` (board.bin + firmware-5.bin)
+- 重载驱动后 dmesg 验证: `features wowlan,mgmt-tx-by-reference,non-bmi crc32 b3d4b790` (新固件特征, 原 31b6f1c6)
+- board_id=0 匹配失败走 board.bin fallback, 功能正常
 
-**修复验证方法**（执行任一路径后）:
-```bash
-# 1. 解除屏蔽并重连
-sshpass -p "$DEVICE_PASS" ssh user@172.16.42.1 'echo DEVICE_PASS | sudo -S sh -c "
-  nmcli connection modify 泽川源科技 connection.autoconnect yes
-  rfkill unblock wifi
-  nmcli device wifi connect 泽川源科技 ifname wlan0"'
-# 2. 观察 30min 无新崩溃 = 根因确认
-journalctl -b 0 -k --no-pager | grep -c "firmware crashed"   # 计数不再增长
-# 3. 恢复监控
-systemctl start health-check.timer
-```
+**注意**:
+- wlanmdsp 放 rootfs 后 tqftpserv 可能优先提供 modem 分区版本 — dmesg `fw_build` 若回退 1.0.1.c2 说明走了 modem, 需排查 tqftpserv 根目录
+- rootfs 重刷会丢固件文件, 需重装 (源文件在主机 `/tmp/wcn3990-fix/` 或重新从 linux-firmware 下载)
+- 新 AP 环境的其他 WPA1/WPA2 混合路由器仍是潜在触发源, 但新固件下未复现
+
+### 7.9 时钟错误 13 天 ✅ 已修复（2026-08-29 03:08）
+
+**现象**: 设备时钟停在 2026-08-16 19:17 (真实 08-29 03:08), 慢 13 天; NTP 未同步 (usb0 无网关出口), `systemd-time-wait-sync` timeout failed。
+
+**根因链**（三层断链）:
+1. PMIC RTC 只增到 1217s (0 起算), 无真实时间
+2. **swclock-offset-save 从未运行** (`not-found`), offset-storage 停在 08-18 手工值 → 开机 swclock-offset-boot 把时间设回 08-16 时代
+3. **fake-rtc-restore.service 是 static 未挂 wants** (`-- No entries --`), 断网开机时无人恢复时间; NTP 又因无网关永远同步不了
+
+**修复动作**:
+1. 立即 `date -s @<host_ts>` 校正到真实时间 → NTP 随即 `synchronized: yes`
+2. 重算 `/var/cache/swclock-offset/offset-storage` = ts - rtc0_since_epoch (1787942593)
+3. `ln -sf` fake-rtc-restore.service 进 `multi-user.target.wants/` (脚本自带年份守卫, NTP 正常时不动作)
+
+**遗留**: swclock-offset-save.service `not-found` 需在下次重启前修复 (APKBUILD swclock-offset 包缺失 save 单元), 否则下次关机 offset 又停更; 已有 fake-rtc-save.timer 30min 兜底。
 
 ---
 
@@ -378,11 +375,11 @@ f873c83 charge-guard 硬件停充完成: 内核补丁0010 (r36) + charge_behavio
 
 ## 10. 推迟的任务（可选）
 
-1. **🔴 WiFi 固件崩溃修复** — 见 §7.8, 当前进行中的主任务; 路径 A (改路由器 WPA2-AES) 或路径 B (lavender 固件)
-2. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
-3. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
-4. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
-5. **电池 40-60% 循环启动** — 当前 cap 从 99% 自然放电中 (磁滞已生效: 降到 40% 自动充电到 60%)
+1. **swclock-offset-save not-found 修复** — 见 §7.9 遗留, 下次重启前修
+2. **WiFi 30min 稳定性观察** — 固件替换后 0 崩溃, 持续观察 `dmesg | grep -c "firmware crashed"`
+3. **硬件 watchdog DTS** — 在 sdm660.dtsi 添加 `qcom,apss-wdt` 节点（当前用 softdog 软件看门狗）
+4. **USB OTG host 模式** — 需先修复 GPIO 58 上拉
+5. **SSH 偶发超时观察** — 2026-08-18 14:33-14:38 出现多次后自愈, 复发查 `journalctl -u sshd`
 6. **电池长期保养** — 每月一次 99→30% 放电循环防鼓包（charge-guard r3 已接管磁滞控制）
 
 ---
@@ -395,7 +392,7 @@ f873c83 charge-guard 硬件停充完成: 内核补丁0010 (r36) + charge_behavio
 | SSH 连不上 (USB) | 检查 USB 线 / `lsusb` 看 `18d1:d001` / 重启设备 |
 | SSH 密码错误 | 用户名是 `user` 不是 `root`; 密码 `DEVICE_PASS_PLACEHOLDER` |
 | SSH host key 改变 | `ssh-keygen -R 172.16.42.1` |
-| WiFi 崩溃循环 | 见 §7.8 — WiFi 已临时屏蔽; 修复前勿 `rfkill unblock wifi`; USB 通道不受影响 |
+| WiFi 崩溃循环 | 已修复见 §7.8 (固件三件套替换); 复发先查 `dmesg | grep -c "firmware crashed"` |
 | WiFi 不连接 | `nmcli device wifi connect "泽川源科技" password "$WIFI_CHINANET_PASS" ifname wlan0` (需 sudo) |
 | poweroff 变重启 | 用 `safe-poweroff.sh`（见 §4） |
 | rootfs 损坏 | `./scripts/one-click-restore.sh`（自动检测; 或 --mode C 重刷） |
@@ -423,4 +420,4 @@ f873c83 charge-guard 硬件停充完成: 内核补丁0010 (r36) + charge_behavio
 
 ---
 
-**最后更新**: 2026-08-18 21:45 | **git HEAD**: `b9bed86` | **设备**: 运行中 (WiFi 屏蔽待修复, USB/charge-guard 正常)
+**最后更新**: 2026-08-29 03:20 | **git HEAD**: 见 git log | **设备**: 运行中 (USB + WiFi 双通道正常, charge-guard 正常)

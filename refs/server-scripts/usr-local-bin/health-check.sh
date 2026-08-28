@@ -169,9 +169,10 @@ fi
 # 3. wlan0 接口 up? (软故障 - 信号弱/关联慢是正常的, 不 restart NM)
 #    但若 WiFi radio 被手动关闭 (r3), 跳过 wlan0/网关检查
 wifi_radio=$(nmcli radio wifi 2>/dev/null)
-if [ "$wifi_radio" = "disabled" ]; then
+rfkill_blocked=$(rfkill list wifi 2>/dev/null | grep -c "Soft blocked: yes")
+if [ "$wifi_radio" = "disabled" ] || [ "$rfkill_blocked" -ge 1 ]; then
     # WiFi 被用户主动关闭, 不算故障, 跳过 WiFi 相关检查
-    logger -t "$TAG" "WiFi radio off (user disabled), skipping wlan0/gateway checks"
+    logger -t "$TAG" "WiFi radio off or rfkill blocked, skipping wlan0/gateway checks"
     check_ok
     exit 0
 fi

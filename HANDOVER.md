@@ -1,7 +1,7 @@
 # 项目交接文档 (Handover)
 
-> 生成日期: 2026-07-02 | 最后更新: 2026-08-29 03:20
-> 上一会话最后操作: **底层问题批量修复完成** — ① 时钟错 13 天 (swclock/fake-rtc 链路断裂, 已修复) ② health-check r7 在 rfkill 屏蔽下误报 (r8 守卫已打) ③ WiFi 固件崩溃 (替换上游 WLAN.HL.2.0 固件三件套后恢复, 已连 LYL 0 崩溃); USB/WiFi 双通道正常, charge-guard 正常
+> 生成日期: 2026-07-02 | 最后更新: 2026-08-29 15:30
+> 上一会话最后操作: **Ubuntu 24.04.4 移植完成并稳定运行** — userdata 刷入 Ubuntu rootfs (pmOS 内核 r36 复用), boot.img 持久化 (modem 永久 blacklist), WiFi 因 modem 生态问题搁置 (见 §7.10), USB SSH/NTP/电量监控正常
 > 项目根目录: `/home/lyl/Documents/system/XiaoMiNote3`
 
 ---
@@ -25,8 +25,8 @@
 ## 2. 设备当前状态
 
 ### 2.1 运行状态
-- **设备状态**: 运行中 (2026-08-18 21:45), SSH/USB 正常; **WiFi 临时屏蔽中** (固件崩溃循环, 见 §7.8)
-- **当前网络**: USB NCM `172.16.42.1` (唯一通道); WiFi `泽川源科技` 已屏蔽待修复
+- **设备状态**: 运行中 (2026-08-29 15:20), SSH/USB 正常; **系统已切换为 Ubuntu 24.04.4 rootfs**
+- **当前网络**: USB NCM `172.16.42.1` (唯一通道); WiFi 不可用 (modem 永久禁用, 见 §7.10)
 - **开机后**: 自动进入 Linux（boot 已持久化，无需 fastboot boot）
 
 ### 2.2 系统配置
@@ -34,17 +34,16 @@
 |---|---|
 | 设备 | Xiaomi Mi Note 3 (jason) |
 | SoC | Qualcomm SDM660 (8 核: 4×A53 + 4×A73) |
-| 内存 | 6 GB |
-| 存储 | 128 GB eMMC |
-| 系统 | postmarketOS edge (Alpine Linux) |
+| 内存 | 6 GB (实际 3.6G 可见) |
+| 存储 | 128 GB eMMC (userdata 51G rootfs) |
+| 系统 | **Ubuntu 24.04.4 LTS (noble) arm64** — 用户空间 Ubuntu, 内核仍 pmOS r36 |
 | 内核 | `6.19.10-sdm660` (r36, #36-postmarketos-qcom-sdm660) |
 | 内核特性 | cpufreq-hw + softdog watchdog + msm-poweroff 补丁 (0009) |
 | init 系统 | systemd (PID 1 = systemd) |
-| USB 连接 | NCM gadget, 设备 IP `172.16.42.1/16` |
+| USB 连接 | NCM gadget (usb-gadget.service), 设备 IP `172.16.42.1/16` |
 | SSH 用户 | `user` (密码 `DEVICE_PASS_PLACEHOLDER`) |
-| WiFi | `泽川源科技` 2.4G (密码 `WIFI_CHINANET_PASS_PLACEHOLDER`) — 2026-08-18 起路由器更换; 5G 版 ath10k 关联被拒, 只用 2.4G; **当前屏蔽中见 §7.8** |
-| 监控体系 | 11 个 systemd timer + 13 个脚本 (见 §5) |
-| 电池 | 2026-08-16 放电实测 12h55m (99→20%), 健康度 ~98% |
+| WiFi | **不可用** — modem 永久 blacklist (见 §7.10); pmOS 时代可用的方案见 §7.8 |
+| 电池 | qcom-battery: 容量/状态/charge_behaviour 可读 (96% Full @ 2026-08-29) |
 | Bootloader | unlocked |
 
 ### 2.3 关键密码
@@ -143,6 +142,8 @@ cd jason_images_V8.5.9.0.NCHCNED_20170831.0000.00_7.1_cn
 | [backups/device-state-20260818/](./backups/device-state-20260818/) | 配置级备份（脚本/timer/配置 tar 包） |
 | [backups/original-jason-20260627-114354/](./backups/original-jason-20260627-114354/) | 原厂 28 分区镜像 (sha256 28/28 通过) |
 | [backups/whyred-non-hlos-20260629/](./backups/whyred-non-hlos-20260629/) | WiFi modem 固件 (whyred NON-HLOS fw 1.0.0.591) |
+| [artifacts/boot-ubuntu24-stable-nomodem-20260829.img](./artifacts/) | **当前 boot 分区内容** (md5 aed48765, cmdline 含 modem blacklist) |
+| [backups/full-system-20260829-fixed/](./backups/full-system-20260829-fixed/) 内 modem-fw-complete.tar.gz | **完整 modem 固件集** (mba 238256B + mdt + b00-b24 共 25 文件, 从 whyred modem.bin 解析提取), WiFi 攻坚时用 |
 
 ### 内核/pmaports
 | 文件 | 用途 |
@@ -319,6 +320,40 @@ python3 scripts/modify-bootimg-cmdline.py /tmp/postmarketOS-export/boot.img /tmp
 3. `ln -sf` fake-rtc-restore.service 进 `multi-user.target.wants/` (脚本自带年份守卫, NTP 正常时不动作)
 
 **遗留**: swclock-offset-save.service `not-found` 需在下次重启前修复 (APKBUILD swclock-offset 包缺失 save 单元), 否则下次关机 offset 又停更; 已有 fake-rtc-save.timer 30min 兜底。
+
+### 7.10 Ubuntu 24.04 移植 — modem/WiFi 搁置 ⚠️（2026-08-29）
+
+**背景**: 用户批准方案 A (pmOS 内核 + Ubuntu 24.04 rootfs, boot.img 与 rootfs 解耦)。安装成功, USB SSH 正常。
+
+**已完成**:
+1. 主机组装 userdata-ubuntu.img: GPT (p1 boot ext2 96M `7d83c53d-...` + p2 root ext4 51.2G `5a0e068c-...`), chroot 配置 systemd/ssh/network-manager/chrony/sudo
+2. fastboot flash userdata + `fastboot boot` 临时引导验证
+3. usb-gadget.service 修复 (幂等版, configfs 不允许覆盖 symlink, 已同步 refs/server-scripts/usr-local-bin/)
+4. charge_behaviour 可读 (qcom-battery), chrony/ssh/usb-gadget 全部 active
+
+**WiFi 失败的根因链 (4 次挂死的完整诊断)**:
+```
+WCN3990 WiFi 固件 (wlanmdsp.mbn) 运行在 modem DSP 上
+  → WiFi 依赖 modem (qcom_q6v5_mss remoteproc) 完整启动
+  → Ubuntu 上 modem 生态不成熟:
+     (a) 首次挂死: modem.b10 固件缺失 (只拷了 b00-b09, whyred 有 b00-b24 共 28 段)
+         → modem 半加载失败 → BPF JIT kick_all_cpus_sync 跨 CPU 死锁
+     (b) 二次挂死: 固件补齐后, rmtfs -s 自动拉起 modem, 但 diag-router 缺失
+         → modem diag 任务饥饿 → 40s 崩溃循环 → RCU stall
+     (c) 三次挂死: diag-router 补齐 (pmOS musl 二进制 + ld-musl runner) 后 modem 仍挂死
+         → pd-mapper 缺 .jsn PD 描述符 / functionfs 注册异常 (内核 6.19 CONFIG_USB_F_FS=m 但 fs 未注册)
+  → 结论: modem 生态在 Ubuntu 上需要大量调试 (pmOS 靠 msm-firmware-loader + soc-qcom-sdm660-rproc 全家桶)
+```
+
+**最终决策 (2026-08-29, 用户知情)**: 稳定优先 — **boot.img 永久 blacklist modem**:
+- `artifacts/boot-ubuntu24-stable-nomodem-20260829.img` (md5 aed48765) 已 dd 持久化到 boot 分区, cmdline 含 `modprobe.blacklist=qcom_q6v5_mss`
+- qrtr-ns/tqftpserv/rmtfs/pd-mapper/diag-router 全部 disable (防误触发)
+- 完整重启循环验证通过: USB SSH + 0 failed 单元
+- 完整 modem 固件集已提取归档 (见 §5 whyred 提取物), 未来攻坚 WiFi 时可直接用
+
+**WiFi 恢复的两条路径** (未来):
+- 路径 1 (推荐): 回 pmOS rootfs (v3 备份一键恢复), pmOS 生态下 WiFi 已修好 (§7.8)
+- 路径 2 (攻坚): Ubuntu 下补齐 pd-mapper .jsn 描述符 + functionfs 修复 + msm-firmware-loader 逻辑移植, 工作量数天级
 
 ---
 
